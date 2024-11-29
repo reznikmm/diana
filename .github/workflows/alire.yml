@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2023 Max Reznik <reznikmm@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+name: Build with Alire
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: alire-project/setup-alire@v4
+    - name: Build diana
+      run: alr build
+    - name: Build phases
+      run: |
+        for J in phases/* ; do
+          alr -C $J build
+        done
+    - name: Build RTL
+      run: |
+        mkdir exe
+        cp -v phases/*/bin/* exe/
+        cp -v share/diana/data/{PARSE,DIANA}.TBL .
+        cp -v share/diana/data/ADA__LIB.CTL .
+        mkdir ADA__LIB
+        exe/loadgrmr
+        rm -v {PARSE,DIANA}.TBL
+        mv '$$$.TMP' PARSE.VM
+        ln -s share/diana/rtl/_standrd.aa .
+        share/diana/scripts/makepre

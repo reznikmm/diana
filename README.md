@@ -1,11 +1,14 @@
 # Diana
 
+[![Build with Alire](https://github.com/reznikmm/diana/actions/workflows/alire.yml/badge.svg)](https://github.com/reznikmm/diana/actions/workflows/alire.yml)
+
 > A translator for Ada 83 to Diana with tools for using Diana
 
 Diana is a translator for Ada 83 to Diana, accompanied by tools
-for working with Diana. This repository contains a copy of the
-original software and a modified version for easier integration
-with the [Alire](https://alire.ada.dev/) package manager.
+for working with Diana. It was originally developed by William
+Easton of Peregrine Systems, Inc. This repository contains a copy
+of the original software and a modified version for easier
+integration with the [Alire](https://alire.ada.dev/) package manager.
 
 ## Repository Structure
 
