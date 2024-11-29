@@ -1,0 +1,27 @@
+name = "diana"
+description = "A translator for Ada 83 to Diana with tools for using Diana"
+version = "0.1.0"
+
+authors = ["William Easton. Peregrine Systems, Inc."]
+maintainers = ["Max Reznik <reznikmm@gmail.com>"]
+maintainers-logins = ["reznikmm"]
+licenses = "Unlicense"
+website = "https://github.com/reznikmm/diana"
+tags = ["frontend", "translator", "ada83", "idl", "grammar", "syntax"]
+
+project-files = ["gnat/diana.gpr"]
+
+[configuration]
+output_dir = "gnat"
+generate_ada = false
+generate_c = false
+
+[build-switches]
+development.optimization = ["-O0"]
+development.style_checks = "No"
+development.contracts = "Yes"
+"*".ada_version = "Ada83"
+"*".debug_info = "Yes"
+
+[[depends-on]]
+gnat = "<2000" # Uses Ada 83 syntax absent in gnat gpl

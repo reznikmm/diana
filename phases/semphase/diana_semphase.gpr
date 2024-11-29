@@ -1,0 +1,30 @@
+with "config/diana_semphase_config.gpr";
+project Diana_Semphase is
+
+   for Source_Dirs use ("src/", "config/");
+   for Object_Dir use "obj/" & Diana_Semphase_Config.Build_Profile;
+   for Create_Missing_Dirs use "True";
+   for Exec_Dir use "bin";
+   for Main use ("semphase.a", "fixpre.a");
+
+   package Compiler is
+      for Default_Switches ("Ada") use Diana_Semphase_Config.Ada_Compiler_Switches;
+   end Compiler;
+
+   package Binder is
+      for Switches ("Ada") use ("-Es"); --  Symbolic traceback
+   end Binder;
+
+   package Naming is
+      for Spec_Suffix ("Ada") use "_.a";
+      for Body_Suffix ("Ada") use ".a";
+
+      for Spec ("reqgene") use "reqgene_.a" at 1;
+      for Body ("reqgene") use "reqgene_.a" at 2;
+   end Naming;
+
+   package Install is
+      for Artifacts (".") use ("share");
+   end Install;
+
+end Diana_Semphase;

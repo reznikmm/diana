@@ -1,0 +1,29 @@
+name = "diana_writelib"
+description = "writes new library file"
+version = "0.1.0-dev"
+
+authors = ["William Easton. Peregrine Systems, Inc."]
+maintainers = ["Max Reznik <reznikmm@gmail.com>"]
+maintainers-logins = ["reznikmm"]
+licenses = "Unlicense"
+website = ""
+tags = []
+
+executables = ["writelib"]
+
+[configuration]
+generate_ada = false
+generate_c = false
+
+[build-switches]
+development.optimization = ["-O0"]
+development.style_checks = "No"
+development.contracts = "Yes"
+"*".ada_version = "Ada83"
+"*".debug_info = "Yes"
+
+[[depends-on]]
+diana = "*"
+
+[[pins]]
+diana = { path='../..' }
