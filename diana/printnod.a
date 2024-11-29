@@ -1,0 +1,321 @@
+with SYSTEM; -- required for address clause
+with TEXT2_IO, DIANAMAN, DIANATBL, PAGEMAN;
+use  TEXT2_IO, DIANAMAN, DIANATBL;
+package body PRINTNOD is
+
+  -- to determine if little-endian or big-endian
+  DUMMY: ARRAY (1..4) OF BYTE := (1,0,0,0);
+  DUMMY2: INTEGER;
+  for DUMMY2 use at DUMMY'ADDRESS;
+  IS_LITTLE_ENDIAN: constant BOOLEAN := (DUMMY2 = 1);
+
+  -- constants for NODE_NAME'POS (must match Diana package)
+  --DN_ROOT:	  constant :=  0;
+  DN_TXTREP:	  constant :=  1;
+  DN_INT_VAL:	  constant :=  2;
+  DN_NIL:	  constant :=  5;
+  DN_LIST:	  constant :=  6;
+  DN_SOURCELINE:  constant := 7;
+  --DN_ERROR:	  constant :=  8;
+  DN_SYMBOL_REP:  constant :=  9;
+  DN_HASH:	  constant := 10;
+
+  VIRGIN_TREE : TREE;
+  CONST_NIL:	TREE;
+
+  HIGH_PAGE:	INTEGER;
+
+  procedure PRINT_SUB(T: TREE; IND: NATURAL);
+  procedure PRINT_SUB_TREE(T: TREE);
+  function  MAKE_TREE(MPG, MTY, MLN: INTEGER) return TREE;
+  function  L_PINT(INT: INTEGER) return NATURAL;
+  function  L_PINT(INT: SHORT) return NATURAL;
+  function  L_PINT(BYT: BYTE) return NATURAL;
+  procedure PUT_LONG_DIGIT (I: INTEGER);
+  function PRINT_ABS_TREE (T:TREE) return INTEGER;
+
+  ----------------------------------------------------------------------
+
+  procedure PRINT_TREE(T:TREE) is
+    DUMMY: INTEGER;
+  begin
+    DUMMY := L_PRINT_TREE(T);
+  end PRINT_TREE;
+
+  function  L_PRINT_TREE(T:TREE) return NATURAL is
+    SIZ :    INTEGER := 0;
+    NAM :    PNAME;
+    TR:      TREE;
+  begin
+    HIGH_PAGE := PAGEMAN.HIGH_VPG;
+    if T.TPG < 0 then
+      if T = VIRGIN_TREE then
+        PUT("?????");
+	return 5;
+      elsif T.TLN /= BYTE'VAL(0) then
+        -- it's a source_position
+	if - INTEGER(T.TPG) > HIGH_PAGE
+	or else INTEGER(T.TLN) >= SECTOR_SIZE then
+	  return PRINT_ABS_TREE(T);
+	end if;
+	SIZ := L_PRINT_TREE (MAKE_TREE(- INTEGER(T.TPG),
+			 DN_SOURCELINE,INTEGER(T.TLN)));
+        PUT('(');
+	TR := DABS(1, MAKE_TREE(- INTEGER(T.TPG),DN_SOURCELINE,INTEGER(T.TLN)));
+        if TR.TTY = BYTE'VAL(DN_INT_VAL) then
+	  SIZ := SIZ + L_PINT(TR.TPG);
+	else
+	  SIZ := SIZ + PRINT_ABS_TREE(TR);
+	end if;
+        PUT(',');
+	SIZ := SIZ + L_PINT(T.TTY);
+        PUT(')');
+	return SIZ + 3;
+      end if;
+    end if;
+    if T.TTY = BYTE'VAL(DN_INT_VAL) then
+      if T.TLN = BYTE'VAL(0) then
+	if T.TPG < 0 then
+	  return L_PINT(T.TPG);
+	else
+          PUT('+');
+	  return L_PINT(T.TPG) + 1;
+	end if;
+      else -- long integer
+	if T.TPG = 0 or else INTEGER(T.TPG) > HIGH_PAGE
+	or else INTEGER(T.TLN) >= SECTOR_SIZE then
+	  return PRINT_ABS_TREE(T);
+	end if;
+	declare
+	  TT: TREE := DABS(0, T);
+	  XX: TREE;
+	  LN: INTEGER := 0;
+	begin
+          if TT.TLN = BYTE'VAL(0) or else INTEGER(T.TLN) > SECTOR_SIZE then
+	    return PRINT_ABS_TREE(T);
+	  end if;
+	  XX := DABS(1,T);
+	  if XX.TPG >= 10000 then
+            PUT('-');
+	  else
+            PUT('+');
+	  end if;
+	  for I in reverse 1 .. INTEGER(TT.TLN) loop
+	    XX := DABS(I,T);
+	    PUT_LONG_DIGIT(INTEGER(XX.TTY) + INTEGER(XX.TLN)*256);
+	    PUT_LONG_DIGIT(INTEGER(XX.TPG) mod 10000);
+	    if I /= 1 then
+	      if (I mod 8) = 1 then
+		NEW_LINE;  -- since dec editor chokes on long line
+	      end if;
+              PUT ('_');
+	    end if;
+	    LN := LN + 9;
+	  end loop;
+	  return LN;
+	end;
+      end if;
+    else
+      if INTEGER(T.TTY) > DIANATBL.LAST_NODE then
+	return PRINT_ABS_TREE(T);
+      end if;
+      SET(NAM, TO => NODE_IMAGE(INTEGER(T.TTY)));
+      PUT(NAM);
+      SIZ := LENGTH(NAM);
+      if T.TPG = 0 and then T.TLN = BYTE'VAL(0) then
+	return SIZ;
+      end if;
+      PUT('.');
+      SIZ := SIZ + L_PINT(T.TPG);
+      PUT('.');
+      SIZ := L_PINT(T.TLN) + SIZ + 2;
+      if T.TTY = BYTE'VAL(DN_TXTREP) then
+        PUT(' ');
+	if INTEGER(T.TPG) > HIGH_PAGE
+	or else INTEGER(T.TLN) >= SECTOR_SIZE then
+          PUT("$$$$$$");
+	  return SIZ + 7;
+	else
+	  declare
+	    WORD_ZERO: TREE := DABS(0,T);
+	    WORD_ONE: TREE := DABS(1,T);
+	  begin
+	    if INTEGER(T.TLN) + INTEGER(WORD_ZERO.TLN) > SECTOR_SIZE
+	    or else INTEGER(WORD_ZERO.TLN) > 32 -- ie, bigger than max sym
+	    -- for difference between VAX and SUN byte order !!
+	    or else (IS_LITTLE_ENDIAN
+                    and then WORD_ONE.TPG mod 256 >= SHORT(WORD_ZERO.TLN) * 4)
+	    or else (not IS_LITTLE_ENDIAN
+                    and then WORD_ONE.TPG / 256 >= SHORT(WORD_ZERO.TLN) * 4)
+            then
+	      SIZ := SIZ+PRINT_ABS_TREE(WORD_ZERO);
+	      SIZ := SIZ+PRINT_ABS_TREE(WORD_ONE);
+	      return SIZ + 1;
+	    end if;
+	  end;
+	end if;
+	SET(NAM, TO => PRINTNAME(T));
+	PUT(NAM);
+	SIZ := SIZ + 1 + INTEGER(LENGTH(NAM));
+      end if;
+      return SIZ;
+    end if;
+  end L_PRINT_TREE;
+
+  procedure PRINT_NODE(T:TREE) is
+  begin
+    PRINT_NODE(T, 0);
+  end PRINT_NODE;
+
+  procedure PRINT_NODE(T:TREE; IND:NATURAL) is
+  begin
+    PRINT_TREE(T);NEW_LINE;
+    if T.TLN /= BYTE'VAL(0) then
+      if T.TPG < 0 then
+	PRINT_SUB(MAKE_TREE(- INTEGER(T.TPG),DN_SOURCELINE,INTEGER(T.TLN)),IND);
+      else
+	PRINT_SUB(T,IND);
+      end if;
+    end if;
+    NEW_LINE;
+  end PRINT_NODE;
+
+  ----------------------------------------------------------------------
+
+  procedure PRINT_SUB(T: TREE; IND: NATURAL) is
+    T_TTY :	INTEGER := INTEGER(T.TTY);
+    A_SIZ :	INTEGER := N_SPEC(T_TTY).NS_SIZE;
+    N_SIZ :	INTEGER := A_SIZ;
+    A_SUB:	INTEGER := N_SPEC(T_TTY).NS_FIRST_A;
+    TR: 	TREE;
+    SQ: 	SEQ_TYPE;
+  begin
+    if T_TTY = DN_HASH then
+      TR := DABS(0,T);
+      N_SIZ := INTEGER(TR.TLN);
+    end if;
+    for I in 1 .. N_SIZ loop
+      for J in 1 .. IND loop
+        PUT(' ');
+      end loop;
+      PUT("  ");
+      if T_TTY = DN_HASH then
+        PUT('-');
+      else
+	PUT(ATTR_IMAGE(abs(A_SPEC(A_SUB).AS_ATNBR)));
+      end if;
+      if A_SPEC(A_SUB).AS_ATNBR >= 0 or else T_TTY = DN_HASH then
+        PUT(": ");
+	PRINT_SUB_TREE(DABS(I,T));
+      else
+	SQ.H := DABS(I,T);
+	SQ.T := CONST_NIL;
+	if SQ.H = CONST_NIL then
+          PUT(": < >");
+        elsif SQ.H.TTY /= BYTE'VAL(DN_LIST) then
+          PUT(": < ");PRINT_SUB_TREE(SQ.H);PUT(" >");
+	else
+          PUT_LINE(":");
+	  for I in 1 .. IND loop
+            PUT(' ');
+	  end loop;
+          PUT("   < ");
+	  loop
+	    PRINT_SUB_TREE(HEAD(SQ));
+	    SQ := TAIL(SQ);
+	    exit
+	      when SQ.H = CONST_NIL;
+            PUT_LINE(",");
+	    for I in 1 .. IND loop
+              PUT(' ');
+	    end loop;
+            PUT("     ");
+	  end loop;
+          PUT(" >");
+	end if;
+      end if;
+      NEW_LINE;
+      A_SUB := A_SUB + 1;
+    end loop;
+  end PRINT_SUB;
+
+  procedure PRINT_SUB_TREE(T: TREE) is
+    T_TTY: INTEGER := INTEGER(T.TTY);
+  begin
+    PRINT_TREE(T);
+    if T_TTY = DN_SYMBOL_REP and then T.TPG > 0 then
+      PUT(' ');PUT(PRINTNAME(T));
+    end if;
+  end PRINT_SUB_TREE;
+
+  function  MAKE_TREE(MPG, MTY, MLN: INTEGER) return TREE is
+    TEMP: TREE;
+  begin
+    TEMP.TPG := SHORT(MPG);
+    TEMP.TTY := BYTE'VAL(MTY);
+    TEMP.TLN := BYTE'VAL(MLN);
+    return TEMP;
+  end MAKE_TREE;
+
+  function  L_PINT(INT: INTEGER) return NATURAL is
+  begin
+    if INT < 0 then
+      if INT < -32767 then -- maximum negative
+        put("-32768");
+	return 6;
+      else
+        PUT('-');
+	return L_PINT(- INT) + 1;
+      end if;
+    elsif INT > 9 then
+      return L_PINT(INT/10) + L_PINT(INT mod 10);
+    else
+      PUT(CHARACTER'VAL(CHARACTER'POS('0')+INT));
+      return 1;
+    end if;
+  end L_PINT;
+
+  function  L_PINT(INT: SHORT) return NATURAL is
+  begin
+      return L_PINT(INTEGER(INT));
+  end L_PINT;
+
+  function  L_PINT(BYT: BYTE) return NATURAL is
+  begin
+      return L_PINT(INTEGER(BYT));
+  end L_PINT;
+
+  procedure PUT_LONG_DIGIT (I: INTEGER) is
+    DUMMY: INTEGER;
+  begin
+    if I < 1000 then
+      PUT('0');
+      if I < 100 then
+        PUT('0');
+	if I < 10 then
+          PUT('0');
+	end if;
+      end if;
+    end if;
+    DUMMY := L_PINT(I);
+  end PUT_LONG_DIGIT;
+
+  function PRINT_ABS_TREE (T:TREE) return INTEGER is
+    SIZ : INTEGER := 6;
+  begin
+    PUT("$$");
+    SIZ := SIZ + L_PINT(T.TPG);
+    PUT('.');
+    SIZ := SIZ + L_PINT(T.TTY);
+    PUT('.');
+    SIZ := SIZ + L_PINT(T.TLN);
+    PUT("$$");
+    return SIZ;
+  end PRINT_ABS_TREE;
+
+begin
+  VIRGIN_TREE := (-1,255,255);
+  CONST_NIL.TPG   := 0;
+  CONST_NIL.TTY   := BYTE'VAL(DN_NIL);
+  CONST_NIL.TLN   := BYTE'VAL(0);
+end PRINTNOD;

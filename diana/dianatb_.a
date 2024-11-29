@@ -1,0 +1,48 @@
+with USERPK; use USERPK;
+package DIANATBL is
+
+  -- Tables used by DIANA manager
+
+  MAX_NODE:	  constant := 255;
+  MAX_ATTR:	  constant := 190;
+  MAX_NODE_ATTR:  constant := 820;
+  type N_SPEC_DATA is
+    record
+      NS_SIZE:	  INTEGER;
+      NS_FIRST_A: INTEGER;
+      NS_ARITY:   ARITIES;
+      NS_NAME_PG: BYTE;
+      NS_NAME_LN: BYTE;
+    end record;
+  type A_SPEC_DATA is
+    record
+      AS_ATNBR:   INTEGER;
+    end record;
+  type A_NAME_DATA is
+    record
+      AN_NAME_PG: BYTE;
+      AN_NAME_LN: BYTE;
+    end record;
+
+  type N_SPEC_TYPE is array (0 .. MAX_NODE) of N_SPEC_DATA;
+  type A_SPEC_TYPE is array (1 .. MAX_NODE_ATTR) of A_SPEC_DATA;
+  type AN_SPEC_TYPE is array (0 .. MAX_ATTR) of A_NAME_DATA;
+  type DIANA_TABLE_TYPE is record
+    TB_LAST_NODE: INTEGER;
+    TB_LAST_ATTR: INTEGER;
+    TB_LAST_NODE_ATTR: INTEGER;
+    TB_N_SPEC: N_SPEC_TYPE;
+    TB_A_SPEC: A_SPEC_TYPE;
+    TB_AN_SPEC: AN_SPEC_TYPE;
+  end record;
+
+  DIANA_TABLE_AREA: DIANA_TABLE_TYPE;
+
+  LAST_NODE:	  INTEGER renames DIANA_TABLE_AREA.TB_LAST_NODE;
+  LAST_ATTR:	  INTEGER renames DIANA_TABLE_AREA.TB_LAST_ATTR;
+  LAST_NODE_ATTR: INTEGER renames DIANA_TABLE_AREA.TB_LAST_NODE_ATTR;
+  N_SPEC:  N_SPEC_TYPE	  renames DIANA_TABLE_AREA.TB_N_SPEC;
+  A_SPEC:  A_SPEC_TYPE	  renames DIANA_TABLE_AREA.TB_A_SPEC;
+  AN_SPEC: AN_SPEC_TYPE   renames DIANA_TABLE_AREA.TB_AN_SPEC;
+
+end DIANATBL;

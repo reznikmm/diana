@@ -1,0 +1,7 @@
+rm -f *.TMP
+ln _standrd.aa "\$\$\$PGM.TMP"
+cp PARSE.VM "\$\$\$.TMP"
+chmod 644 "\$\$\$.TMP"
+exe/parphase
+exe/fixpre
+exe/writelib

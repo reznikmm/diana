@@ -1,0 +1,116 @@
+with USERPK; use USERPK;
+with DIANA, DIANATTR, DIANAMAN; use DIANA, DIANATTR, DIANAMAN;
+with REQGENE; use REQGENE;
+with SETUTIL; use SETUTIL;
+pragma ELABORATE(REQGENE);
+
+package REQUTIL is
+
+    function GET_BASE_STRUCT(TYPE_SPEC: TREE) return TREE;
+
+    function GET_ANCESTOR_TYPE(TYPE_SPEC: TREE) return TREE;
+
+    procedure REQUIRE_SAME_TYPES
+		( EXP_1:	TREE
+		; TYPESET_1:	TYPESET_TYPE
+		; EXP_2:	TREE
+		; TYPESET_2:	TYPESET_TYPE
+		; TYPESET_OUT:	out TYPESET_TYPE );
+
+    procedure REQUIRE_TYPE
+		( TYPE_SPEC:	TREE
+		; EXP:		TREE
+		; TYPESET:	in out TYPESET_TYPE );
+
+    function IS_NONLIMITED_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_NONLIMITED_TYPE is new REQ_TYPE_XXX
+		( IS_NONLIMITED_TYPE
+                , "Nonlimited type required" );
+
+    function IS_LIMITED_TYPE(ITEM: TREE) return BOOLEAN;
+
+    function IS_PRIVATE_TYPE(ITEM: TREE) return BOOLEAN;
+
+    function IS_INTEGER_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_INTEGER_TYPE is new REQ_TYPE_XXX
+		( IS_INTEGER_TYPE
+                , "Integer type required" );
+
+    function IS_BOOLEAN_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_BOOLEAN_TYPE is new REQ_TYPE_XXX
+		( IS_BOOLEAN_TYPE
+                , "Boolean type required" );
+
+    function IS_REAL_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_REAL_TYPE is new REQ_TYPE_XXX
+		( IS_REAL_TYPE
+                , "Real type required" );
+
+    function IS_SCALAR_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_SCALAR_TYPE is new REQ_TYPE_XXX
+		( IS_SCALAR_TYPE
+                , "Scalar type required" );
+
+    function IS_MEMBER_OF_UNSPECIFIED
+			( SPEC_TYPE: TREE
+			; UNSPEC_TYPE: TREE )
+	    return BOOLEAN;
+
+    function IS_NONLIMITED_COMPOSITE_TYPE (TYPE_SPEC: TREE) return BOOLEAN;
+    function IS_STRING_TYPE (TYPE_SPEC: TREE) return BOOLEAN;
+    function IS_CHARACTER_TYPE (TYPE_SPEC: TREE) return BOOLEAN;
+
+    function IS_UNIVERSAL_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_UNIVERSAL_TYPE is new REQ_TYPE_XXX
+		( IS_UNIVERSAL_TYPE
+                , "Universal type required" );
+
+    function IS_NON_UNIVERSAL_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_NON_UNIVERSAL_TYPE is new REQ_TYPE_XXX
+		( IS_NON_UNIVERSAL_TYPE
+                , "Non-universal type required" );
+
+    function IS_DISCRETE_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_DISCRETE_TYPE is new REQ_TYPE_XXX
+		( IS_DISCRETE_TYPE
+                , "Discrete type required" );
+
+    function IS_TASK_TYPE(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_TASK_TYPE is new REQ_TYPE_XXX
+		( IS_TASK_TYPE
+                , "Task type required" );
+
+    procedure REQUIRE_ID
+		( ID_KIND:	NODE_NAME
+		; EXP:		TREE
+		; DEFSET:	in out DEFSET_TYPE );
+
+    function IS_TYPE_DEF(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_TYPE_DEF is new REQ_DEF_XXX
+		( IS_TYPE_DEF
+                , "Type or subtype name required" );
+
+    function IS_ENTRY_DEF(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_ENTRY_DEF is new REQ_DEF_XXX
+		( IS_ENTRY_DEF
+                , "Entry name required" );
+
+    function IS_PROC_OR_ENTRY_DEF(ITEM: TREE) return BOOLEAN;
+    procedure REQUIRE_PROC_OR_ENTRY_DEF is new REQ_DEF_XXX
+		( IS_PROC_OR_ENTRY_DEF
+                , "Procedure or entry name required" );
+
+
+    function is_function_or_array_def(item: tree) return boolean;
+    procedure require_function_or_array_def is new req_def_xxx
+		( is_function_or_array_def
+                , "Function or array or access array required" );
+
+
+    function is_function_or_enumeration_def(item: tree) return boolean;
+    procedure require_function_or_enumeration_def is new req_def_xxx
+		( is_function_or_enumeration_def
+                , "Function or enumeration literal required" );
+
+
+end REQUTIL;

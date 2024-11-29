@@ -1,0 +1,71 @@
+with DIANAMAN;
+use  DIANAMAN;
+package body LALRIDL is
+
+  SPEC_FILE: constant STRING := "LALRIDL";
+
+  procedure CREATE_DIANA is
+  begin
+    CREATE_IDL(SPEC_FILE);
+  end CREATE_DIANA;
+
+  procedure OPEN_DIANA is
+  begin
+    OPEN_IDL(SPEC_FILE);
+  end OPEN_DIANA;
+
+  function  MAKE     (C: in NODE_NAME)	    return TREE is
+  begin
+    return MAKE(NODE_NAME'POS(C));
+  end;
+
+  function  KIND     (T: in TREE)	    return NODE_NAME is
+  begin
+    if T.TPG >= 0 then
+      return NODE_NAME'VAL(T.TTY);
+    else
+      QUIT("KIND: T.TPG < 0");
+    end if;
+  end KIND;
+
+  procedure D(A: ATTRIBUTE_NAME; T: in TREE; V: in TREE) is
+  begin
+    D(ATTRIBUTE_NAME'POS(A), T, V);
+  end D;
+
+  function  D(A: ATTRIBUTE_NAME; T: in TREE) return TREE is
+  begin
+    return D(ATTRIBUTE_NAME'POS(A), T);
+  end D;
+
+  procedure DB(A: ATTRIBUTE_NAME; T: in TREE; V: in BOOLEAN) is
+  begin
+    DB(ATTRIBUTE_NAME'POS(A), T, V);
+  end DB;
+
+  function  DB(A: ATTRIBUTE_NAME; T: in TREE) return BOOLEAN is
+  begin
+    return DB(ATTRIBUTE_NAME'POS(A), T);
+  end DB;
+
+  procedure DI(A: ATTRIBUTE_NAME; T: in TREE; V: in INTEGER) is
+  begin
+    DI(ATTRIBUTE_NAME'POS(A), T, V);
+  end DI;
+
+  function  DI(A: ATTRIBUTE_NAME; T: in TREE) return INTEGER is
+  begin
+    return DI(ATTRIBUTE_NAME'POS(A), T);
+  end DI;
+
+  function NODE_IMAGE (C: NODE_NAME) return STRING is
+  begin
+    return NODE_IMAGE(NODE_NAME'POS(C));
+  end NODE_IMAGE;
+
+  function ATTR_IMAGE (A: ATTRIBUTE_NAME) return STRING is
+  begin
+    return ATTR_IMAGE(ATTRIBUTE_NAME'POS(A));
+  end ATTR_IMAGE;
+
+end LALRIDL;

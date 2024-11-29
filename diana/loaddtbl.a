@@ -1,0 +1,132 @@
+with TEXT_IO; use  TEXT_IO;
+package body LOADDTBL is
+
+  LOADDTBL_ERROR: exception;
+
+  function UPPER_CASE (A: STRING) return STRING is
+    S: STRING(1 .. A'LENGTH) := A;
+    MAGIC: constant := CHARACTER'POS('A') - CHARACTER'POS('a');
+  begin
+    for I in 1 .. S'LENGTH loop
+      if S(I) in 'a' .. 'z' then
+        S(I) := CHARACTER'VAL(CHARACTER'POS(S(I)) + MAGIC);
+      end if;
+    end loop;
+    return S;
+  end UPPER_CASE;
+
+  procedure READ_TABLE is
+    TABLE_FILE: TEXT_IO.FILE_TYPE;
+    BUFFER: STRING(1 .. 120);
+    B_CHAR: CHARACTER;
+    B_NUM: INTEGER;
+    LAST: NATURAL;
+    FIRSTCOL, LASTCOL: NATURAL;
+
+    LAST_NODE_WORK: INTEGER := -1;
+    LAST_ATTR_WORK: INTEGER := -1;
+    LAST_CLASS_WORK: INTEGER := -1;
+    LAST_NODE_ATTR: NODE_ATTR_INDEX_TYPE := 0;
+
+    ATTR_SEEN_FOR_THIS_NODE: BOOLEAN := FALSE;
+
+    package MY_INTEGER_IO is new INTEGER_IO(INTEGER);
+    use MY_INTEGER_IO;
+
+    procedure NIBBLE_NAME is
+      -- set firstcol, lastcol for next item in buffer
+    begin
+      FIRSTCOL := LASTCOL + 1;
+      while FIRSTCOL <= LAST
+      and then (BUFFER(FIRSTCOL) = ' ' or else BUFFER(FIRSTCOL) = ASCII.HT)
+      loop
+	FIRSTCOL := FIRSTCOL + 1;
+      end loop;
+      LASTCOL := FIRSTCOL;
+      while LASTCOL <= LAST
+      and then BUFFER(LASTCOL) /= ' '
+      and then BUFFER(LASTCOL) /= ASCII.HT
+      loop
+	LASTCOL := LASTCOL + 1;
+      end loop;
+      LASTCOL := LASTCOL - 1;
+    end NIBBLE_NAME;
+
+  begin -- Read_Table
+    NODE_ATTR(0) := 0;
+    LAST_CLASS := 0; -- in case no classes
+    CLASS_LOW(0) := 0;
+    CLASS_HIGH(0) := 0;
+
+    TEXT_IO.OPEN(TABLE_FILE, TEXT_IO.IN_FILE, "DIANA.TBL");
+    loop
+      GET(TABLE_FILE, B_CHAR);
+      if B_CHAR = 'C' then
+	GET_LINE(TABLE_FILE, BUFFER, LAST);
+	LAST_CLASS_WORK := LAST_CLASS_WORK + 1;
+	LAST_CLASS := CLASS_INDEX_TYPE(LAST_CLASS_WORK);
+	LASTCOL := 0;
+	NIBBLE_NAME;
+        CLASS_ID(LAST_CLASS) := new STRING'(BUFFER(FIRSTCOL..LASTCOL));
+	CLASS_LOW(LAST_CLASS) := NODE_INDEX_TYPE(LAST_NODE_WORK + 1);
+      elsif B_CHAR = 'E' then
+	GET_LINE(TABLE_FILE, BUFFER, LAST);
+	LASTCOL := 0;
+	NIBBLE_NAME;
+	-- find matching class name and set Class_High
+	for II in reverse 0 .. LAST_CLASS loop -- CONSTRAINT_ERROR if not found
+	  if CLASS_ID(II).all = BUFFER(FIRSTCOL..LASTCOL) then
+	    CLASS_HIGH(II) := LAST_NODE;
+	  end if;
+	end loop;
+      elsif B_CHAR = 'N' then
+	GET(TABLE_FILE, B_NUM);
+	GET_LINE(TABLE_FILE, BUFFER, LAST);
+	LASTCOL := 0;
+	if LAST_NODE_WORK + 1 /= B_NUM then
+	  SET_OUTPUT(STANDARD_OUTPUT);
+          PUT_LINE ("**** nodes out of sync ****");
+	  raise LOADDTBL_ERROR;
+	end if;
+	LAST_NODE_WORK := B_NUM;
+	LAST_NODE := NODE_INDEX_TYPE(LAST_NODE_WORK);
+	NIBBLE_NAME;
+        NODE_ID(LAST_NODE) := new STRING'(BUFFER(FIRSTCOL..LASTCOL));
+
+	ATTR_SEEN_FOR_THIS_NODE := FALSE;
+	NODE_ATTR_LOW(LAST_NODE) := 1;
+	NODE_ATTR_HIGH(LAST_NODE) := 0;
+	
+      elsif B_CHAR = 'A' or B_CHAR = 'B' or B_CHAR = 'I' then
+	GET(TABLE_FILE, B_NUM);
+	GET_LINE(TABLE_FILE, BUFFER, LAST);
+	LASTCOL := 0;
+	if B_NUM < 0 then
+	  B_NUM := - B_NUM;
+          ATTR_KIND(ATTR_INDEX_TYPE(B_NUM)) := 'S'; -- sequence
+	else
+	  ATTR_KIND(ATTR_INDEX_TYPE(B_NUM)) := B_CHAR;
+	end if;
+	NIBBLE_NAME;
+        ATTR_ID(ATTR_INDEX_TYPE(B_NUM))
+			:= new STRING'(BUFFER(FIRSTCOL..LASTCOL));
+	if LAST_ATTR < ATTR_INDEX_TYPE(B_NUM) then
+	  LAST_ATTR := ATTR_INDEX_TYPE(B_NUM);
+	end if;
+
+	LAST_NODE_ATTR := LAST_NODE_ATTR + 1;
+	if not ATTR_SEEN_FOR_THIS_NODE then
+	    ATTR_SEEN_FOR_THIS_NODE := TRUE;
+	    NODE_ATTR_LOW(LAST_NODE) := LAST_NODE_ATTR;
+	end if;
+	NODE_ATTR(LAST_NODE_ATTR) := ATTR_INDEX_TYPE(B_NUM);
+	NODE_ATTR_HIGH(LAST_NODE) := LAST_NODE_ATTR;
+      end if;
+    end loop;
+
+  exception
+    when END_ERROR =>
+      TEXT_IO.CLOSE(TABLE_FILE);
+  end READ_TABLE;
+
+end LOADDTBL;

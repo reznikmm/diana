@@ -1,0 +1,148 @@
+Diana front end + Diana-to-Iris (For UMass)
+-------------------------------
+
+Sources supplied in 2 directories
+        EXPORT - the Diana front end
+        DTI - the Diana-to-Iris conversion
+
+The Diana front end accepts and does semantics for Ada programs;
+after running it on a source file, the result is left in Diana's
+virtual memory (file $$$.TMP) as a Diana compilation node; it is
+also stored as a file in the "Diana library", so that full library
+management is done.  The program
+appears to pass the class A and C tests in ACVC 1.10; it finds some,
+but not all, errors, so it doesn't claim to pass the class B tests.
+It failed 33 tests in 1.11; I would fix them if you tell me it's a
+problem.  (It has had several million lines run through it by various
+groups, so it seems fairly robust.  I am using it as the front end
+of an Ada-to-C translator, which allows me to write in Ada and deliver
+the binary (i.e., C) to my customers.)
+
+The Diana-to-Iris converter is intended to give an Iris tree with
+semantics resolved; it was intended to allow experimentation with
+Iris and to provide a means of checking the semantics of an Iris
+front end.  What it does now is (1) look at the result of running
+the front end on a file containing one compilation unit, (2) convert
+that unit and everything transitively with'ed to an Iris
+representation, and (3) pretty-print the result.  Iris operators
+(with leading "~") are left unresolved, as are built-in operators.
+Predefined standard is also converted as if it were a unit (but not
+pretty-printed) to give names defined in standard something to resolve
+to.  Note that defined operators (e.g. MY_PKG."+") are resolved.
+(If you have an Iris language package, it shouldn't be too hard to add
+the missing resolutions.)
+
+Diana-to-Iris is a quick-and-dirty kludge.  It operates by walking the
+Diana tree and sticking the Iris node representation in the source position
+attribute; this is then used in resolving things.  The internal Iris
+representation consists of a linear array for each Ada compilation unit;
+an apply node is represented as an access to an array of arguments.
+All of this is in memory; no attempt at conserving space.
+
+You will, of course, wish to modify the output to whatever your form is
+for Iris.  Note that with'ed units should be translated every time with
+the same index values; you will have to worry about making the segment 
+numbers correct.
+
+Documentation in export:
+        front.doc -- a (now fairly old) documentation file
+        print.me -- a chronological list of changes
+
+Installation:
+        (Instructions provided here so you can get going without
+        messing with all of the instructions in front.doc -- you
+        probably won't want to rebuild the grammar or change Diana
+        attributes, although all of the requisite sources are
+        supplied.)
+
+        (1)  Compile and bind (using your favorite Ada make utility)
+        the following main programs (executables in subdirectory exe):
+
+                loadgrmr
+                fixpre
+
+                parphase
+                libphase
+                semphase
+                writelib
+                errphase
+
+                iridrive (in DTI -- with's things in EXPORT)
+
+        
+        (2)  Create binary tables and virgin virtual memory (this is
+        step 9 in front.doc)    
+
+                Make sure DIANA.TBL and PARSE.TBL in current dir--note
+                names in caps.
+
+                exe\loadgrmr
+                mv \$\$\$.TMP diana.vm
+
+        (3)  Set up a virgin ada library
+
+                md ADA__LIB
+                
+                copy ada__lib.ini to current directory; rename it ADA__LIB.CTL
+                add a new first line to it (no spaces at end of line):
+                  
+                        P ADA__LIB/
+
+                (It's a prefix which tells where the ada library directory is)
+
+        (4)  Compile the predefined STANDARD -- shell script makepre provided
+
+        (5)  Shell script front is used to run the Diana front end; you
+             need to compile Ada predefined units -- everything
+             of the form [a-z]*.aa; do io__exc.aa first, since it's with'ed
+             by others.  I.e.,
+
+                        front io__exc.aa
+                        front text_io.aa
+                        ... etc
+
+        (6)  You may want to save ADA__LIB.CTL and the contents of ADA__LIB
+             as a "new" library.
+
+        (7)  Running front and Diana-to-Iris:
+
+                        front world.a
+                        exe\iridrive
+
+             (You will want to mess with shell scripts.  You need withable
+             things in the Diana library; you really don't need bodies
+             which do not contain stubs--probably, you want two shell
+             scripts--one of which saves the Diana tree and one of which
+             does not.)
+
+             (ADA__LIB.CTL contains (a) pointer to the library directory,
+             (b) translation between 8-character and full names and (c)
+             a "time stamp".  If there is an error detected in compilation,
+             the new library file is not stored; it's OK if the time
+             stamp gets bumped anyway.)
+
+Note.  makepre.bat is an IBM PC DOS batch file which automates the
+installation steps above; I include it because it has been tested, even
+though it's not of any direct use on a unix.  front.bat is the equivalent
+for the shell script front for the PC.  (If anybody should actually
+want to try it on a PC, I suggest talking with me first.)
+
+Please call if problems, bugs, etc.  I'll try to fix bugs quickly.  I have
+no support for new features or drastic changes.
+
+You may want to set up a login for me on your machine to facilitate ftp's and
+looking at problems.  Please provide both dial-up and internet access.
+
+I would appreciate having access to and the use of your Iris node
+representation and tools for handling the predefined environment.
+I may even try do do some work on a "real" Iris front end.
+
+Bill Easton
+703-689-1168
+fax 703-689-1315
+E-mail easton@grebyn.com -- don't check very often
+
+
+                
+
+                

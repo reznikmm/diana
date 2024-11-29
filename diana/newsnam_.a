@@ -1,0 +1,13 @@
+with USERPK; use USERPK;
+with DIANAMAN; use DIANAMAN;
+with SEMGLOB; use SEMGLOB;
+with GENSUBS; use GENSUBS;
+
+package NEWSNAM is
+
+    procedure REPLACE_SOURCE_NAME
+		( SOURCE_NAME:	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE
+		; H_IN: 	H_TYPE
+		; DECL:		TREE := CONST_VOID );
+end NEWSNAM;

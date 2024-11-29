@@ -1,0 +1,34 @@
+with USERPK; use USERPK;
+with SEMGLOB; use SEMGLOB;
+with DIANAMAN; USE DIANAMAN;
+
+package GENSUBS is
+
+    NODE_HASH_SIZE: constant := 131;
+    type NODE_ARRAY_TYPE is array (0 .. INTEGER(NODE_HASH_SIZE - 1)) of TREE;
+    type NODE_HASH_TYPE is
+	record
+	   limit: natural := 32000; --5000; -- to avoid runaway substitution
+	   a: NODE_ARRAY_TYPE := (others => const_void);
+	end record;
+
+    procedure SUBSTITUTE
+		( NODE: 	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE
+		; H_IN: 	H_TYPE );
+
+    procedure REPLACE_NODE
+		( NODE: 	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE );
+
+    procedure SUBSTITUTE_ATTRIBUTES
+		( NODE: 	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE
+		; H_IN: 	H_TYPE );
+
+    procedure INSERT_NODE_HASH
+		( NODE_HASH:	in out NODE_HASH_TYPE
+		; NEW_NODE:	TREE
+		; OLD_NODE:	TREE );
+
+end GENSUBS;

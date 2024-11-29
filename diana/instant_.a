@@ -1,0 +1,10 @@
+with USERPK; use USERPK;
+with semglob; use semglob;
+
+package INSTANT is
+
+    procedure WALK_INSTANTIATION
+	    ( UNIT_ID: TREE
+	    ; INSTANTIATION: TREE
+	    ; H: H_TYPE );
+end INSTANT;

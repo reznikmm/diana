@@ -1,0 +1,433 @@
+with TEXT2_IO, USERPK, LALRIDL, DIANAMAN, GRMRTBL, GRMROPS;
+use  TEXT2_IO, USERPK, LALRIDL, DIANAMAN, GRMRTBL, GRMROPS;
+procedure CHEKGRMR is
+  USER_ROOT:		TREE;
+  GR_STATE_SEQ: 	SEQ_TYPE;
+
+  STATE:		TREE;
+  STATE_NBR:		INTEGER;
+  TER_GO_COUNT: 	INTEGER;
+  NONTER_GO_COUNT:	INTEGER;
+  REDUCE_COUNT: 	INTEGER;
+
+  REDUCE_NBR_TERS:	array (1 .. 6) of INTEGER;
+  REDUCE_ITEM:		array (1 .. 6) of TREE;
+
+  type SYLTBL_TYPE is
+    record
+      STATE_NBR:	INTEGER;
+      REDUCE:		BOOLEAN;
+    end record;
+  SYLTBL:		array (- INTEGER(170) .. 350) of SYLTBL_TYPE;
+
+  ALT_SEM_TBL: array (0 .. 700) of INTEGER; -- semantics for alt (or 0)
+
+  procedure MAIN;
+  procedure SCAN_GRAMMAR;
+  procedure SCAN_STATE;
+  procedure CHECK_REDUCE(ITEM: TREE);
+  procedure GEN_TER_INFO;
+  function REDUCE_ACTION(ITEM: TREE) return INTEGER;
+  function REDUCE_CODE(ALT: TREE) return INTEGER;
+  function INTEGER_IMAGE(V: INTEGER) return STRING;
+  procedure WRITE_TABLES;
+
+  procedure MAIN is
+  begin
+    OPEN_DIANA;
+    USER_ROOT := D(XD_USER_ROOT, CONST_ROOT);
+    GR_STATE_SEQ := LIST(D(XD_STATELIST,USER_ROOT));
+    if DI(XD_ERR_COUNT, CONST_ROOT) > 0 then
+      PUT(DI(XD_ERR_COUNT,CONST_ROOT),1);PUT_LINE(" errors in early phases.");
+    end if;
+    for I in SYLTBL'RANGE loop
+      SYLTBL(I).STATE_NBR := 0;
+    end loop;
+
+    ST_TBL_LAST := 0;
+    AC_SYM_LAST := 1;
+    AC_TBL_LAST := AC_SYM'LAST; -- i.e., nothing with greater index yet
+    AC_SYM(1) := BYTE(0); AC_TBL(1) := 0; -- error as first elt
+    NTER_LAST := 0;
+
+    for I in ALT_SEM_TBL'RANGE loop
+      ALT_SEM_TBL(I) := 0;
+    end loop;
+
+    SCAN_GRAMMAR;
+    PUT_LINE("Write tables.");
+    WRITE_TABLES;
+    CLOSE_DIANA;
+  end MAIN;
+
+  procedure SCAN_GRAMMAR is
+    STATE_SEQ:		SEQ_TYPE := GR_STATE_SEQ;
+    TER_GO_SUM: 	INTEGER:= 0;
+    NONTER_GO_SUM:	INTEGER:= 0;
+    REDUCE_SUM: 	INTEGER:= 0;
+  begin
+    while not IS_EMPTY(STATE_SEQ) loop
+      STATE := HEAD(STATE_SEQ); STATE_SEQ := TAIL(STATE_SEQ);
+      STATE_NBR := DI(XD_STATE_NBR, STATE);
+      TER_GO_COUNT := 0;
+      NONTER_GO_COUNT := 0;
+      REDUCE_COUNT := 0;
+      SCAN_STATE;
+      PUT(STATE_NBR);PUT(TER_GO_COUNT);PUT(NONTER_GO_COUNT);PUT(REDUCE_COUNT);
+      NEW_LINE;
+      NONTER_GO_SUM := NONTER_GO_SUM + NONTER_GO_COUNT;
+      TER_GO_SUM := TER_GO_SUM + TER_GO_COUNT;
+      REDUCE_SUM := REDUCE_SUM + REDUCE_COUNT;
+    end loop;
+    PUT("******");PUT(TER_GO_SUM);PUT(NONTER_GO_SUM);PUT(REDUCE_SUM);
+    NEW_LINE;
+  end SCAN_GRAMMAR;
+
+  procedure SCAN_STATE is
+    ITEM_SEQ:		SEQ_TYPE := LIST(STATE);
+    ITEM:		TREE;
+    SYL_SEQ:		SEQ_TYPE;
+    SYL:		TREE;
+    SYL_NBR:		INTEGER;
+    RULE:		TREE;
+    GOTO_STATE: 	TREE;
+  begin
+    while not IS_EMPTY(ITEM_SEQ) loop
+      ITEM := HEAD(ITEM_SEQ); ITEM_SEQ := TAIL(ITEM_SEQ);
+      SYL_SEQ := LIST(ITEM);
+      if IS_EMPTY(SYL_SEQ) then
+	REDUCE_COUNT := REDUCE_COUNT + 1;
+	CHECK_REDUCE(ITEM);
+      else
+	SYL := HEAD(SYL_SEQ);
+	if KIND(SYL) = DN_TERMINAL then
+	  SYL_NBR := - DI(XD_TER_NBR, SYL);
+	  if SYLTBL(SYL_NBR).STATE_NBR /= STATE_NBR then
+	    TER_GO_COUNT := TER_GO_COUNT + 1;
+	    SYLTBL(SYL_NBR).STATE_NBR := STATE_NBR;
+	    SYLTBL(SYL_NBR).REDUCE := FALSE;
+--@           PUT("No reduce ");PUT(SYL_NBR);NEW_LINE;
+	  end if;
+	else
+	  RULE := D(XD_RULE,SYL);
+	  if KIND(RULE) /= DN_VOID then
+	    SYL_NBR := DI(XD_RULE_NBR, D(XD_RULEINFO, RULE));
+	    if SYLTBL(SYL_NBR).STATE_NBR /= STATE_NBR then
+	      NONTER_GO_COUNT := NONTER_GO_COUNT + 1;
+	      SYLTBL(SYL_NBR).STATE_NBR := STATE_NBR;
+	      SYLTBL(SYL_NBR).REDUCE := FALSE;
+--@             PUT("No reduce ");PUT(SYL_NBR);NEW_LINE;
+	    end if;
+	  end if;
+	end if;
+      end if;
+    end loop;
+
+    -- check for shift-reduce conflicts
+    if REDUCE_COUNT > 0 then
+--@     PUT_LINE("Check shift-reduce");
+      ITEM_SEQ := LIST(STATE);
+      while not IS_EMPTY(ITEM_SEQ) loop
+	ITEM := HEAD(ITEM_SEQ); ITEM_SEQ := TAIL(ITEM_SEQ);
+	SYL_SEQ := LIST(ITEM);
+	if not IS_EMPTY(SYL_SEQ) then
+	  SYL := HEAD(SYL_SEQ);
+	  if KIND(SYL) = DN_TERMINAL then
+	    SYL_NBR := - DI(XD_TER_NBR, SYL);
+--@           PUT("Checking ");PUT(SYL_NBR,1);NEW_LINE;
+	    if SYLTBL(SYL_NBR).REDUCE then
+	      ERROR(D(LX_SRCPOS,SYL),
+                    "Shift/Red conf state " & INTEGER_IMAGE(STATE_NBR)
+                    & " - " & PRINTNAME(D(XD_SYMREP,SYL)));
+	    end if;
+	  end if;
+	end if;
+      end loop;
+    end if;
+
+    -- write nonter actions
+    if NONTER_GO_COUNT > 0 then
+      ITEM_SEQ := LIST(STATE);
+      while not IS_EMPTY(ITEM_SEQ) loop
+	ITEM := HEAD(ITEM_SEQ); ITEM_SEQ := TAIL(ITEM_SEQ);
+	GOTO_STATE := D(XD_GOTO, ITEM);
+	if KIND(GOTO_STATE) /= DN_VOID then
+	  SYL := HEAD(LIST(ITEM));
+	  if KIND(SYL) = DN_NONTERMINAL then
+	    SYL_NBR := DI(XD_RULE_NBR,D(XD_RULEINFO,D(XD_RULE,SYL)));
+	    if SYLTBL(SYL_NBR).STATE_NBR = STATE_NBR then
+	      SYLTBL(SYL_NBR).STATE_NBR := 0;
+	      AC_SYM_LAST := AC_SYM_LAST + 1;
+	      AC_SYM(AC_SYM_LAST) := BYTE(SYL_NBR);
+	      AC_TBL(AC_SYM_LAST) := short(DI(XD_STATE_NBR,GOTO_STATE));
+	    end if;
+	  end if;
+	end if;
+      end loop;
+    end if;
+
+    -- write state table entry
+    ST_TBL_LAST := ST_TBL_LAST + 1;
+    -- assume no semantics for now !!!!
+    if TER_GO_COUNT = 0 and then NONTER_GO_COUNT = 0
+    and then REDUCE_COUNT = 1 then
+      ST_TBL(ST_TBL_LAST) := REDUCE_ACTION(ITEM);
+    else
+      ST_TBL(ST_TBL_LAST) := AC_SYM_LAST + 1;
+      GEN_TER_INFO;
+    end if;
+  end SCAN_STATE;
+
+  procedure CHECK_REDUCE(ITEM: TREE) is
+    -- mark symbols used for reduce; check for reduce-reduce conflict
+    NBR_TERS:		INTEGER := 0;
+    FOLLOW_SEQ: 	SEQ_TYPE := LIST(D(XD_FOLLOW, ITEM));
+    TER:		TREE;
+    TER_NBR:		INTEGER;
+  begin
+    while not IS_EMPTY(FOLLOW_SEQ) loop
+      TER := HEAD(FOLLOW_SEQ); FOLLOW_SEQ := TAIL(FOLLOW_SEQ);
+--@     PUT_LINE(PRINTNAME(D(XD_SYMREP,TER)));
+      TER_NBR := DI(XD_TER_NBR, TER);
+--@     PUT("Reduce ");PUT(- TER_NBR);NEW_LINE;
+      if SYLTBL(- TER_NBR).STATE_NBR /= STATE_NBR then
+	SYLTBL(- TER_NBR).STATE_NBR := STATE_NBR;
+      elsif SYLTBL(- TER_NBR).REDUCE then
+	ERROR(D(LX_SRCPOS,D(XD_ALTERNATIVE,ITEM)),
+              "Red/Red conf state " & INTEGER_IMAGE(STATE_NBR)
+              & " - " & PRINTNAME(D(XD_SYMREP,TER)));
+      end if;
+      SYLTBL(- TER_NBR).REDUCE := TRUE;
+      NBR_TERS := NBR_TERS + 1;
+    end loop;
+    REDUCE_NBR_TERS (REDUCE_COUNT) := NBR_TERS;
+    REDUCE_ITEM (REDUCE_COUNT) := ITEM;
+  end CHECK_REDUCE;
+
+  procedure GEN_TER_INFO is
+    -- fill in info for terminals and dont care in action table
+    ITEM_SEQ:		SEQ_TYPE;
+    ITEM:		TREE;
+    GOTO_STATE: 	TREE;
+    TEMP_INTEGER:	INTEGER;
+    TEMP_TREE:		TREE;
+    SYL_LIST:		SEQ_TYPE;
+    SYL:		TREE;
+    SYL_NBR:		INTEGER;
+  begin
+    -- write ter goto actions
+    if TER_GO_COUNT > 0 then
+      ITEM_SEQ := LIST(STATE);
+      while not IS_EMPTY(ITEM_SEQ) loop
+	ITEM := HEAD(ITEM_SEQ); ITEM_SEQ := TAIL(ITEM_SEQ);
+	GOTO_STATE := D(XD_GOTO, ITEM);
+	if KIND(GOTO_STATE) /= DN_VOID then
+	  SYL := HEAD(LIST(ITEM));
+	  if KIND(SYL) = DN_TERMINAL then
+	    SYL_NBR := DI(XD_TER_NBR,SYL);
+	    if SYLTBL(- SYL_NBR).STATE_NBR = STATE_NBR then
+	      SYLTBL(- SYL_NBR).STATE_NBR := 0;
+	      AC_SYM_LAST := AC_SYM_LAST + 1;
+	      AC_SYM(AC_SYM_LAST) := BYTE(SYL_NBR);
+	      AC_TBL(AC_SYM_LAST) := short(DI(XD_STATE_NBR,GOTO_STATE));
+	    end if;
+	  end if;
+	end if;
+      end loop;
+    end if;
+
+    -- write non-default reduce actions
+    -- first make #1 longest reduce (it will be dont care)
+    for I in 2 .. REDUCE_COUNT loop
+      if REDUCE_NBR_TERS (I) > REDUCE_NBR_TERS (1) then
+	TEMP_INTEGER := REDUCE_NBR_TERS(1);
+	TEMP_TREE := REDUCE_ITEM(1);
+	REDUCE_NBR_TERS(1) := REDUCE_NBR_TERS(I);
+	REDUCE_ITEM(1) := REDUCE_ITEM(I);
+	REDUCE_NBR_TERS(I) := TEMP_INTEGER;
+	REDUCE_ITEM(I) := TEMP_TREE;
+      end if;
+
+      -- now compute reduce action and put out for each ter
+      TEMP_INTEGER := REDUCE_ACTION(REDUCE_ITEM(I));
+      SYL_LIST := LIST(D(XD_FOLLOW,REDUCE_ITEM(I)));
+      while not IS_EMPTY(SYL_LIST) loop
+	AC_SYM_LAST := AC_SYM_LAST + 1;
+	AC_SYM(AC_SYM_LAST) := BYTE(DI(XD_TER_NBR,HEAD(SYL_LIST)));
+	AC_TBL(AC_SYM_LAST) := short(TEMP_INTEGER);
+	SYL_LIST := TAIL(SYL_LIST);
+      end loop;
+    end loop;
+
+    -- now put out dont care action
+    AC_SYM_LAST := AC_SYM_LAST + 1;
+    AC_SYM(AC_SYM_LAST) := BYTE(0);
+    if REDUCE_COUNT > 0 then
+      AC_TBL(AC_SYM_LAST) := short(REDUCE_ACTION(REDUCE_ITEM(1)));
+    else
+      AC_TBL(AC_SYM_LAST) := 0;
+    end if;
+  end GEN_TER_INFO;
+
+  function REDUCE_ACTION(ITEM: TREE) return INTEGER is
+    ALT:	TREE := D(XD_ALTERNATIVE, ITEM);
+    ALT_NBR:	INTEGER := DI(XD_ALT_NBR, ALT);
+    ALT_SEM:	INTEGER := ALT_SEM_TBL(ALT_NBR);  -- 0 or action entry
+    SEM_S:	SEQ_TYPE;
+    SEM:	TREE;
+    SEM_OP_POS: INTEGER;
+    SEM_OP_KIND: GRMR_OP;
+    CODE:	INTEGER;
+    TXT:	TREE;
+  begin
+    if ALT_SEM /= 0 then
+      return ALT_SEM; -- already computed
+    end if;
+
+    SEM_S := LIST(D(XD_SEMANTICS,ALT));
+    if IS_EMPTY(SEM_S) then
+      -- no semantics, just use reduce code
+      ALT_SEM := REDUCE_CODE(ALT);
+    else
+      -- semantics, indirect into rest of alt tbl
+      ALT_SEM := - (AC_TBL_LAST + 1);  -- branch to where semantics will start
+      while not IS_EMPTY(SEM_S) loop
+	SEM := HEAD(SEM_S); SEM_S := TAIL(SEM_S);
+	AC_TBL_LAST := AC_TBL_LAST + 1;
+	SEM_OP_POS := DI(XD_SEM_OP, SEM);
+        SEM_OP_KIND := GRMR_OP'VAL(SEM_OP_POS);
+	CODE := 1000 * SEM_OP_POS;
+	if SEM_OP_KIND in GRMR_OP_NODE then
+	  CODE := CODE + DI(XD_KIND, SEM);
+	elsif SEM_OP_KIND in GRMR_OP_QUOTE then
+	  TXT := D(XD_KIND, SEM);
+	  CODE := CODE + INTEGER(TXT.TPG);
+	  AC_TBL(AC_TBL_LAST) := short(CODE);
+	  AC_TBL_LAST := AC_TBL_LAST + 1;
+	  CODE := INTEGER(TXT.TLN);
+	end if;
+	AC_TBL(AC_TBL_LAST) := short(CODE);
+      end loop;
+      AC_TBL_LAST := AC_TBL_LAST + 1;
+      AC_TBL(AC_TBL_LAST) := short(REDUCE_CODE(ALT));
+
+    end if;
+
+    -- save computed value and return
+    ALT_SEM_TBL (ALT_NBR) := ALT_SEM;
+    return ALT_SEM;
+
+  end REDUCE_ACTION;
+
+  function REDUCE_CODE(ALT: TREE) return INTEGER is
+    NBR_POPS: INTEGER := 0;
+    SYL_LIST: SEQ_TYPE := LIST(ALT);
+  begin
+    while not IS_EMPTY(SYL_LIST) loop
+      SYL_LIST := TAIL(SYL_LIST);
+      NBR_POPS := NBR_POPS + 1;
+    end loop;
+    return - (10000 + NBR_POPS*1000
+	  + DI(XD_RULE_NBR, D(XD_RULEINFO, D(XD_RULE,ALT))));
+  end REDUCE_CODE;
+
+  function INTEGER_IMAGE(V: INTEGER) return STRING is
+  begin
+    if V < 0 then
+      return '-' & INTEGER_IMAGE(- V);
+    elsif V >= 10 then
+      return INTEGER_IMAGE(V/10) & INTEGER_IMAGE(V mod 10);
+    else
+      return "" & CHARACTER'VAL(CHARACTER'POS('0') + V);
+    end if;
+  end INTEGER_IMAGE;
+
+  procedure WRITE_TABLES is
+    OFILE: FILE_TYPE;
+    STATE_IND:	INTEGER := 1;
+    RULE_LIST:	SEQ_TYPE;
+    RULE:	TREE;
+    AC_SUB:	INTEGER;
+    TXT_LN:	INTEGER;
+  begin
+    CREATE(OFILE, OUT_FILE, "parse.tbl");
+    PUT("Nbr of states is");PUT(ST_TBL_LAST);
+    PUT(" - max");PUT(ST_TBL'LAST);NEW_LINE;
+    PUT("Nbr of action symbols is");PUT(AC_SYM_LAST);
+    PUT(" - max");PUT(AC_SYM'LAST);NEW_LINE;
+    PUT("Last action entry is");PUT(AC_TBL_LAST);
+    PUT(" - max");PUT(AC_TBL'LAST);NEW_LINE;
+    for I in 1 .. AC_SYM_LAST loop
+      while STATE_IND <= ST_TBL_LAST
+      and then ST_TBL(STATE_IND) <= I loop
+        PUT(OFILE,'S');PUT(OFILE,STATE_IND,4);
+	PUT(OFILE,ST_TBL(STATE_IND));NEW_LINE(OFILE);
+	STATE_IND := STATE_IND + 1;
+      end loop;
+      PUT(OFILE,'T');PUT(OFILE,I,5);PUT(OFILE,integer(AC_TBL(I)));
+      PUT(OFILE,INTEGER(AC_SYM(I)));NEW_LINE(OFILE);
+    end loop;
+    while STATE_IND <= ST_TBL_LAST loop
+      PUT(OFILE,'S');PUT(OFILE,STATE_IND,4);
+      PUT(OFILE,ST_TBL(STATE_IND));NEW_LINE(OFILE);
+      STATE_IND := STATE_IND + 1;
+    end loop;
+
+    PUT("Number of action entries is");PUT(AC_TBL_LAST);NEW_LINE;
+
+    AC_SUB := AC_SYM'LAST;
+    while AC_SUB < AC_TBL_LAST loop
+      AC_SUB := AC_SUB + 1;
+      PUT(OFILE,'A');PUT(OFILE,AC_SUB,5);
+      declare
+	DATA: INTEGER := integer(AC_TBL(AC_SUB));
+	DATA_KIND: GRMR_OP;
+	TXT: TREE;
+      begin
+	if DATA < 1000 then
+	  PUT(OFILE, DATA);
+        elsif (DATA / 1000) > GRMR_OP'POS(GRMR_OP'LAST) then
+	  PUT(OFILE, DATA);
+          PUT(OFILE, "###############");
+          PUT_LINE("##### ERROR IN TABLE");
+	else
+          DATA_KIND := GRMR_OP'VAL(DATA/1000);
+	  if DATA_KIND not in GRMR_OP_QUOTE then
+	    PUT(OFILE, DATA);
+	  else
+            PUT(OFILE, (GRMR_OP'POS(DATA_KIND))*1000);
+	    AC_SUB := AC_SUB + 1;
+	    TXT_LN := integer(AC_TBL(AC_SUB));
+	    if TXT_LN in LINE_NBR then
+	      TXT := MAKE_TREE(DATA mod 1000,
+                               NODE_NAME'POS(DN_SYMBOL_REP), TXT_LN);
+	      PUT(OFILE,PRINTNAME(TXT));
+	    else
+	      PUT(OFILE, DATA mod 1000);
+              PUT(OFILE,' ');
+	      PUT(OFILE,TXT_LN,0);
+              PUT(OFILE,"**********");
+              PUT_LINE("***** ERROR IN TABLE");
+	    end if;
+	  end if;
+	end if;
+      end;
+      NEW_LINE(OFILE);
+    end loop;
+    NTER_LAST := 0;
+    RULE_LIST := LIST(D(XD_GRAMMAR, USER_ROOT));
+    while not IS_EMPTY(RULE_LIST) loop
+      RULE := HEAD(RULE_LIST); RULE_LIST := TAIL(RULE_LIST);
+      NTER_LAST := NTER_LAST + 1;
+      PUT(OFILE,'N');PUT(OFILE,NTER_LAST,4);PUT(OFILE,' ');
+      PUT_LINE(OFILE,PRINTNAME(D(XD_NAME,RULE)));
+    end loop;
+    PUT("Number of nonterminals is");PUT(NTER_LAST);NEW_LINE;
+    -- CLOSE(OFILE); -- don't close -- avoid extra form feed
+  end WRITE_TABLES;
+
+begin
+  PUT_LINE("Begin CHEKGRMR.");
+  MAIN;
+  PUT_LINE("End CHEKGRMR.");
+end CHEKGRMR;

@@ -1,0 +1,8 @@
+
+with USERPK; use USERPK;
+
+package REPNODE is
+
+    function NODE_REP (NODE: TREE) return STRING;
+
+end REPNODE;

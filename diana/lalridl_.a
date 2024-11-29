@@ -1,0 +1,108 @@
+with USERPK; use USERPK;
+package LALRIDL is
+
+  -- Defines initial segment of DIANA for use with grammar-massaging
+  -- programs.  If program does not use Ada nodes and attributes,
+  -- LALRIDL may be imported instead of DIANA + DIANATTR.
+
+  type ATTRIBUTE_NAME is
+	  ( XD_HIGH_PAGE
+	  , XD_USER_ROOT
+	  , XD_SOURCE_LIST
+	  , XD_ERR_COUNT
+	  , SPARE_1
+	  , XD_HEAD
+	  , XD_TAIL
+	  , XD_NUMBER
+	  , XD_ERROR_LIST
+	  , XD_SRCPOS
+	  , XD_TEXT
+	  , XD_DEFLIST
+	  , XD_LIST
+	  , XD_SOURCENAME
+	  , XD_GRAMMAR
+	  , XD_STATELIST
+	  , XD_STRUCTURE
+	  , XD_TIMESTAMP
+	  , SPARE_3
+	  , XD_NAME
+	  , XD_IS_NULLABLE
+	  , XD_RULEINFO
+	  , LX_SRCPOS
+	  , XD_ALT_NBR
+	  , XD_RULE
+	  , XD_STATE_S
+	  , XD_SEMANTICS
+	  , XD_SYMREP
+	  , XD_TER_NBR
+	  , XD_IS_REACHABLE
+	  , XD_GENS_TER_STR
+	  , XD_TIMECHECKED
+	  , XD_TIMECHANGED
+	  , XD_RULE_NBR
+	  , XD_INIT_NONTER_S
+	  , XD_STATE_NBR
+	  , XD_ALTERNATIVE
+	  , XD_ALT_TAIL
+	  , XD_SYL_NBR
+	  , XD_GOTO
+	  , XD_FOLLOW
+	  , XD_SEM_INDEX
+	  , XD_SEM_OP
+	  , XD_KIND
+    );
+
+  type NODE_NAME is
+	( DN_ROOT
+	, DN_TXTREP
+	, DN_NUM_VAL
+	, DN_FALSE
+	, DN_TRUE
+	, DN_NIL
+	, DN_LIST
+	, DN_SOURCELINE
+	, DN_ERROR
+	, DN_SYMBOL_REP
+	, DN_HASH
+	, DN_VOID
+	, DN_USER_ROOT
+	, DN_RULE_S
+	, DN_RULE
+	, DN_ALT
+	, DN_TERMINAL
+	, DN_NONTERMINAL
+	, DN_RULEINFO
+	, DN_STATE_S
+	, DN_STATE
+	, DN_ITEM
+	, DN_TERMINAL_S
+	, DN_SEM_S
+	, DN_SEM_NODE
+	, DN_SEM_OP
+    );
+
+  procedure CREATE_DIANA;
+  procedure OPEN_DIANA;
+
+  function MAKE (C: in NODE_NAME) return TREE;
+  -- procedure DESTROY (t: in TREE);
+  function KIND (T: in TREE) return NODE_NAME;
+
+  -- Other functions/procedures defined in DIANAMAN.SPC
+
+  -- Attribute functions/procedures (Janus version)
+
+  procedure D (A: ATTRIBUTE_NAME; T: in TREE; V: in TREE);
+  function  D (A: ATTRIBUTE_NAME; T: in TREE) return TREE ;
+
+  procedure DB(A: ATTRIBUTE_NAME; T: in TREE; V: in BOOLEAN);
+  function  DB(A: ATTRIBUTE_NAME; T: in TREE) return BOOLEAN ;
+
+  -- for Ada (not universal) integers
+  procedure DI(A: ATTRIBUTE_NAME; T: in TREE; V: in  INTEGER);
+  function  DI(A: ATTRIBUTE_NAME; T: in TREE) return INTEGER ;
+
+  function NODE_IMAGE (C: NODE_NAME) return STRING;
+  function ATTR_IMAGE (A: ATTRIBUTE_NAME) return STRING;
+
+end LALRIDL;

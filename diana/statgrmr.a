@@ -1,0 +1,416 @@
+--with TEXT2_IO, USERPK, DIANA, DIANATTR, DIANAMAN, TERMLIST;
+--use  TEXT2_IO, USERPK, DIANA, DIANATTR, DIANAMAN, TERMLIST;
+with TEXT2_IO, USERPK, LALRIDL, DIANAMAN, TERMLIST;
+use  TEXT2_IO, USERPK, LALRIDL, DIANAMAN, TERMLIST;
+--@ with PRINTNOD; use PRINTNOD;
+procedure STATGRMR is
+
+  USER_ROOT:	TREE;
+  GRAMMAR:	TREE;
+  GR_RULE_SEQ:	SEQ_TYPE;
+  STATE_SEQ:	SEQ_TYPE; -- list of all states generated
+  STATE_S:	TREE; -- in user root
+  STATE_COUNT:	INTEGER := 0;
+  WORK_LIST:	SEQ_TYPE; -- States still to be processed
+  MORE_PASSES:	BOOLEAN;  -- indicates change made in trans close pass
+--@ DEBUG_MAX:	INTEGER := 35;
+  DUMMY_FOLLOW: TREE; -- empty follow list, to keep prntstat happy
+
+  HASH_SIZE:	constant := 2999; -- a prime
+  HASH: 	array (0 .. INTEGER(HASH_SIZE - 1)) of TREE; -- defined states
+
+  -- data for tables to speed up new state calculation
+  -- For each symbol, index points to a chain of items with the
+  -- given symbol following the position marker (i.e., those items
+  -- which, after shifting, form the core of a new state).
+  type INDEX_TYPE is
+    record		   -- one for each symbol (- ter, + nonter)
+      TIME:	INTEGER;   -- pass (from state) at which used
+      F, L:	INTEGER;   -- first, last items
+    end record;
+  type CHAIN_TYPE is
+    record
+      N:	INTEGER;   -- next item; 0 is end of chain
+      T:	TREE;	   -- item
+      FIRST:	BOOLEAN;   -- first item for this symbol
+    end record;
+
+  INDEX:	array(-INTEGER(170) .. 400) of INDEX_TYPE;
+  CHAIN:	array(1 .. 100) of CHAIN_TYPE;
+  CHAIN_LAST:	INTEGER;
+
+  procedure MAIN;
+  procedure INITIALIZE;
+  procedure MAKE_STATES;
+  function CHECK_POSSIBLE_TO(
+	FROM_INDEX:  INTEGER;
+	POSSIBLE_TO: TREE) return BOOLEAN;
+  function MAKE_NEW_STATE(FROM_INDEX: INTEGER) return TREE;
+  procedure FORM_CLOSURE(ITEM_SEQ: in out SEQ_TYPE);
+  procedure INSERT_RULES_IN_CLOSURE(ITEM_SEQ: in out SEQ_TYPE;
+		RULE_SEQ_ARG: in SEQ_TYPE);
+  procedure INSERT_ALTS_IN_CLOSURE(ITEM_SEQ: in out SEQ_TYPE;
+		ALT_SEQ_ARG: in SEQ_TYPE);
+  function MAKE_ITEM(XALT: TREE; XALTTAIL: SEQ_TYPE;
+	XSYLNBR: INTEGER) return TREE;
+  function MAKE_STATE return TREE;
+  function ITEM_INDEX(IT: TREE) return INTEGER; -- 0 if none
+
+  procedure MAIN is
+  begin
+    OPEN_DIANA;
+    USER_ROOT := D(XD_USER_ROOT, CONST_ROOT);
+    GRAMMAR := D(XD_GRAMMAR, USER_ROOT);
+    GR_RULE_SEQ := LIST(GRAMMAR);
+    STATE_SEQ := MAKE;
+    WORK_LIST := STATE_SEQ;
+
+    PUT_LINE("Initialize.");
+    INITIALIZE;
+
+    PUT_LINE("Make States.");
+    MAKE_STATES;
+
+    STATE_S := MAKE(DN_STATE_S);
+    LIST(STATE_S, STATE_SEQ);
+    D(XD_STATELIST, USER_ROOT, STATE_S);
+    CLOSE_DIANA;
+  end MAIN;
+
+  procedure INITIALIZE is
+    RULE_SEQ:	SEQ_TYPE := GR_RULE_SEQ;
+    RULE:	TREE;
+    ALT:	TREE;
+    STATE:	TREE;
+    ITEM_SEQ:	SEQ_TYPE;
+    RULE_COUNT: INTEGER := 0;
+  begin
+    DUMMY_FOLLOW := MAKE(DN_TERMINAL_S);
+    LIST(DUMMY_FOLLOW, MAKE);
+
+    -- Clear hash table
+    for I in HASH'RANGE loop
+      HASH(I) := CONST_VOID;
+    end loop;
+
+    -- insert rule nbrs in rules (move this to read/init !!!)
+    while not IS_EMPTY(RULE_SEQ) loop
+      RULE := HEAD(RULE_SEQ); RULE_SEQ := TAIL(RULE_SEQ);
+      RULE_COUNT := RULE_COUNT + 1;
+      DI(XD_RULE_NBR, D(XD_RULEINFO,RULE), RULE_COUNT);
+    end loop;
+    PUT(RULE_COUNT,1);PUT_LINE(" rules.");
+
+    -- clear index table timestamps (so we don't have to initialize each time)
+    for I in INDEX'RANGE loop
+      INDEX(I).TIME := 0;
+    end loop;
+
+    -- Generate initial state
+    RULE := HEAD(GR_RULE_SEQ);
+    ALT := HEAD(LIST(RULE));
+
+    ITEM_SEQ := APPEND(MAKE, MAKE_ITEM(ALT, LIST(ALT), 0));
+    FORM_CLOSURE(ITEM_SEQ);
+    STATE := MAKE_STATE;
+
+    LIST(STATE, ITEM_SEQ);
+    -- do not put in hash table since initial state can't be reached by goto
+    PUT_LINE("End initialize.");
+  end INITIALIZE;
+
+  procedure MAKE_STATES is
+    FROM_STATE: 	TREE;
+    FROM_NBR:		INTEGER;
+    FROM_ITEM_SEQ:	SEQ_TYPE;
+    FROM_ITEM:		TREE;
+    FROM_INDEX: 	INTEGER;
+
+    procedure CALCULATE_GOTO is
+      -- @ - following 3 lines for debug
+      FROM_SYLLABLE:	TREE := HEAD(LIST(FROM_ITEM));
+      FROM_KIND:	NODE_NAME := KIND(FROM_SYLLABLE);
+      FROM_SYMBOL:	TREE := D(XD_SYMREP, FROM_SYLLABLE);
+      TO_STATE: 	TREE := CONST_VOID;
+      FROM_ALT: 	TREE := D(XD_ALTERNATIVE, FROM_ITEM);
+      POSSIBLE_TO:	TREE;
+      TEMP_ITEM:	TREE;
+      HASH_CODE:	INTEGER := 0;
+      HASH_DELTA:	INTEGER := 1;
+      ELEMENT_COUNT:	INTEGER := 0;
+      II:		INTEGER; -- item chain number
+    begin
+--@     PUT("Calc goto At alt");PUT(DI(XD_ALT_NBR,FROM_ALT));PUT(" syl");
+--@     PUT(DI(XD_SYL_NBR,FROM_ITEM));PUT(" - ");
+--@     PUT_LINE(PRINTNAME(FROM_SYMBOL));
+
+      -- calculate hash code for goto target
+      II := INDEX(FROM_INDEX).F;
+      while II /= 0 loop
+	ELEMENT_COUNT := ELEMENT_COUNT + 1;
+	TEMP_ITEM := CHAIN(II).T;
+	HASH_CODE := abs (HASH_CODE
+	      - 28 * DI(XD_ALT_NBR,D(XD_ALTERNATIVE,TEMP_ITEM))
+	      - 3 * DI(XD_SYL_NBR,TEMP_ITEM)
+	      - 11 * ELEMENT_COUNT);
+	II := CHAIN(II).N;
+      end loop;
+--@     PUT("HASH_CODE = ");PUT(HASH_CODE);PUT(" --> ");
+      HASH_CODE := HASH_CODE mod HASH_SIZE;
+--@     PUT(HASH_CODE);NEW_LINE;
+
+      while HASH(HASH_CODE) /= CONST_VOID loop
+	POSSIBLE_TO := HASH(HASH_CODE);
+	if CHECK_POSSIBLE_TO(
+	      FROM_INDEX,POSSIBLE_TO) then
+	  TO_STATE := POSSIBLE_TO;
+	  exit;
+	end if;
+	if HASH_DELTA >= HASH_SIZE then
+          PUT_LINE("Hash table overflow.");
+	  raise ASSERTION_ERROR;
+	end if;
+	HASH_CODE := (HASH_CODE + HASH_DELTA) mod HASH_SIZE;
+	HASH_DELTA := HASH_DELTA + 2; -- so hash_code increases by n ** 2
+      end loop;
+
+      if TO_STATE = CONST_VOID then
+        -- didn't find one
+	TO_STATE := MAKE_NEW_STATE(FROM_INDEX);
+	HASH(HASH_CODE) := TO_STATE;
+      end if;
+
+      -- insert new state as goto for all rules with given next symbol
+      II := INDEX(FROM_INDEX).F;
+      while II /= 0 loop
+	FROM_ITEM := CHAIN(II).T;
+	D(XD_GOTO, FROM_ITEM, TO_STATE);
+	II := CHAIN(II).N;
+      end loop;
+    end CALCULATE_GOTO;
+
+  begin
+    while not IS_EMPTY(WORK_LIST) loop
+      FROM_STATE := HEAD(WORK_LIST);
+      FROM_NBR := DI(XD_STATE_NBR,FROM_STATE);
+      if STATE_COUNT mod 20 = 0 then
+        put('*');
+--@     else
+--@       put(' ');
+      end if;
+--@     PUT("From state");PUT(FROM_NBR,5);PUT(" -- last");PUT(STATE_COUNT,5);
+--@     NEW_LINE;
+
+      -- construct chain structure for this state
+      CHAIN_LAST := 0;
+      FROM_ITEM_SEQ := LIST(FROM_STATE);
+      while not IS_EMPTY(FROM_ITEM_SEQ) loop
+	FROM_ITEM := HEAD(FROM_ITEM_SEQ);
+	FROM_ITEM_SEQ := TAIL(FROM_ITEM_SEQ);
+	FROM_INDEX := ITEM_INDEX(FROM_ITEM);
+	if FROM_INDEX /= 0 then
+	  -- insert in chain structure
+	  CHAIN_LAST := CHAIN_LAST + 1;
+	  declare
+	    CHAIN_I: CHAIN_TYPE renames CHAIN(CHAIN_LAST);
+	    INDEX_I: INDEX_TYPE renames INDEX(FROM_INDEX);
+	  begin
+	    CHAIN_I.N := 0;
+	    CHAIN_I.T := FROM_ITEM;
+	    if INDEX_I.TIME /= FROM_NBR then
+	      INDEX_I.TIME := FROM_NBR;
+	      INDEX_I.F := CHAIN_LAST;
+	      CHAIN_I.FIRST := TRUE;
+	    else
+	      CHAIN(INDEX_I.L).N := CHAIN_LAST;
+	      CHAIN_I.FIRST := FALSE;
+	    end if;
+	    INDEX_I.L := CHAIN_LAST;
+	  end;
+	end if;
+      end loop;
+
+      for CH in 1 .. CHAIN_LAST loop
+	if CHAIN(CH).FIRST then
+	  FROM_ITEM := CHAIN(CH).T;
+	  FROM_INDEX := ITEM_INDEX(FROM_ITEM);
+	  CALCULATE_GOTO;
+	end if;
+      end loop;
+      WORK_LIST := TAIL(WORK_LIST);
+    end loop;
+    NEW_LINE;
+  end MAKE_STATES;
+
+  function CHECK_POSSIBLE_TO(
+	FROM_INDEX:  INTEGER;
+	POSSIBLE_TO: TREE) return BOOLEAN is
+    II: 		INTEGER := INDEX(FROM_INDEX).F;
+    NEW_ITEM_SEQ:	SEQ_TYPE := LIST(POSSIBLE_TO);
+    OLD_ITEM:		TREE;
+    NEW_ITEM:		TREE;
+  begin
+    loop
+      if IS_EMPTY(NEW_ITEM_SEQ)
+      or else DI(XD_SYL_NBR,(HEAD(NEW_ITEM_SEQ))) = 0 then
+	-- not a possible core item -- no more core items
+	return II = 0;	-- i.e., match if no more core items needed
+      end if;
+      if II = 0 then
+	return FALSE; -- since there are more core items and none needed
+      end if;
+      OLD_ITEM := CHAIN(II).T;
+      NEW_ITEM := HEAD(NEW_ITEM_SEQ);
+      if D(XD_ALTERNATIVE,OLD_ITEM) /= D(XD_ALTERNATIVE,NEW_ITEM)
+      or else DI(XD_SYL_NBR,OLD_ITEM) + 1 /= DI(XD_SYL_NBR,NEW_ITEM) then
+	return FALSE;
+      end if;
+      II := CHAIN(II).N;
+      NEW_ITEM_SEQ := TAIL(NEW_ITEM_SEQ);
+    end loop;
+  end CHECK_POSSIBLE_TO;
+
+  function MAKE_NEW_STATE(FROM_INDEX: INTEGER) return TREE is
+    II: 		INTEGER := INDEX(FROM_INDEX).F;
+    STATE:		TREE := MAKE_STATE;
+    NEW_ITEM_SEQ:	SEQ_TYPE := MAKE;
+    NEW_ITEM:		TREE;
+    OLD_ITEM:		TREE;
+    OLD_TAIL:		SEQ_TYPE;
+  begin
+    while II /= 0 loop
+      OLD_ITEM := CHAIN(II).T;
+      OLD_TAIL := LIST(OLD_ITEM);
+
+--@--   PUT_LINE("Making new item");
+      NEW_ITEM := MAKE_ITEM(D(XD_ALTERNATIVE,OLD_ITEM),
+	    TAIL(OLD_TAIL),
+	    DI(XD_SYL_NBR,OLD_ITEM) + 1 );
+      NEW_ITEM_SEQ := APPEND(NEW_ITEM_SEQ, NEW_ITEM);
+
+      II := CHAIN(II).N;
+    end loop;
+
+    FORM_CLOSURE(NEW_ITEM_SEQ);
+
+    LIST(STATE, NEW_ITEM_SEQ);
+    return STATE;
+  end MAKE_NEW_STATE;
+
+  procedure FORM_CLOSURE(ITEM_SEQ: in out SEQ_TYPE) is
+    ITEM_SUBSEQ:	SEQ_TYPE := ITEM_SEQ;
+    ITEM:		TREE;
+    ITEMTAIL:		SEQ_TYPE;
+    ITEMSYL:		TREE;
+    RULE:		TREE;
+    INIT_NONTER_SEQ:	SEQ_TYPE := MAKE;
+  begin
+--@   PUT_LINE("Form closure.");
+--@   DEBUG_MAX := DEBUG_MAX - 1;
+--@   if DEBUG_MAX <= 0 then
+--@     PUT_LINE("DEBUG_MAX REACHED*****");return;
+--@   end if;
+    while not IS_EMPTY(ITEM_SUBSEQ) loop
+      ITEM := HEAD(ITEM_SUBSEQ);
+      ITEM_SUBSEQ := TAIL(ITEM_SUBSEQ);
+      ITEMTAIL := LIST(ITEM);
+      if not IS_EMPTY(ITEMTAIL) then
+	ITEMSYL:= HEAD(ITEMTAIL);
+	if KIND(ITEMSYL) = DN_NONTERMINAL then
+	  RULE := D(XD_RULE,ITEMSYL);
+	  -- Check for undefined non-terminals; skip them
+	  if KIND(RULE) /= DN_VOID then
+	    INIT_NONTER_SEQ := R_UNION(INIT_NONTER_SEQ,
+		  LIST(D(XD_INIT_NONTER_S, D(XD_RULEINFO, RULE))));
+	  end if;
+	end if;
+      end if;
+    end loop;
+    INSERT_RULES_IN_CLOSURE(ITEM_SEQ, INIT_NONTER_SEQ);
+  end FORM_CLOSURE;
+
+  procedure INSERT_RULES_IN_CLOSURE(ITEM_SEQ: in out SEQ_TYPE;
+		RULE_SEQ_ARG: in SEQ_TYPE) is
+    RULE_SEQ:	SEQ_TYPE := RULE_SEQ_ARG;
+  begin
+    while not IS_EMPTY(RULE_SEQ) loop
+      INSERT_ALTS_IN_CLOSURE(ITEM_SEQ, LIST(HEAD(RULE_SEQ)));
+      RULE_SEQ := TAIL(RULE_SEQ);
+    end loop;
+  end INSERT_RULES_IN_CLOSURE;
+
+  procedure INSERT_ALTS_IN_CLOSURE(ITEM_SEQ: in out SEQ_TYPE;
+		ALT_SEQ_ARG: in SEQ_TYPE) is
+    ALT_SEQ:	SEQ_TYPE := ALT_SEQ_ARG;
+    ALT:	TREE;
+    ITEM:	TREE;
+    ITEM_SUBSEQ:SEQ_TYPE;
+  begin
+    while not IS_EMPTY(ALT_SEQ) loop
+      ALT := HEAD(ALT_SEQ); ALT_SEQ := TAIL(ALT_SEQ);
+      ITEM := MAKE_ITEM(ALT, LIST(ALT), 0);
+      ITEM_SEQ := APPEND(ITEM_SEQ, ITEM);
+    end loop;
+  end INSERT_ALTS_IN_CLOSURE;
+
+  function MAKE_ITEM(XALT: TREE; XALTTAIL: SEQ_TYPE;
+	XSYLNBR: INTEGER) return TREE is
+    ITEM:   TREE := MAKE(DN_ITEM);
+  begin
+    D(XD_ALTERNATIVE, ITEM, XALT);
+    LIST(ITEM, XALTTAIL);
+    DI(XD_SYL_NBR, ITEM, XSYLNBR);
+    D(XD_GOTO, ITEM, CONST_VOID);
+    D(XD_FOLLOW, ITEM, DUMMY_FOLLOW); -- nil follow list, for prntstat
+
+    return ITEM;
+  end MAKE_ITEM;
+
+  function MAKE_STATE return TREE is
+    STATE:	TREE  := MAKE(DN_STATE);
+  begin
+    STATE_COUNT := STATE_COUNT + 1;
+    DI(XD_STATE_NBR, STATE, STATE_COUNT);
+
+    -- add to list of states
+    STATE_SEQ := APPEND(STATE_SEQ, STATE);
+    -- make sure work_list is tail of state_seq (implementation !!!)
+    if KIND(WORK_LIST.H) /= DN_LIST then
+      if KIND(WORK_LIST.H) = DN_NIL then
+	WORK_LIST.H := STATE;
+      else
+	WORK_LIST.H := STATE_SEQ.T;
+
+      end if;
+    end if;
+
+    return STATE;
+  end MAKE_STATE;
+
+  function ITEM_INDEX(IT: TREE) return INTEGER is
+    FROM_TAIL: SEQ_TYPE;
+    FROM_SYL:  TREE;
+    FROM_RULE: TREE;
+  begin
+    FROM_TAIL := LIST(IT);
+    if IS_EMPTY(FROM_TAIL) then
+      return 0;
+    else
+      FROM_SYL := HEAD(FROM_TAIL);
+      if KIND(FROM_SYL) = DN_TERMINAL then
+	return - DI(XD_TER_NBR,FROM_SYL);
+      else -- must be nonterminal
+	FROM_RULE := D(XD_RULE,FROM_SYL);
+	if KIND(FROM_RULE) = DN_VOID then
+	  return 0;
+	else
+	  return DI(XD_RULE_NBR, D(XD_RULEINFO,FROM_RULE));
+	end if;
+      end if;
+    end if;
+  end ITEM_INDEX;
+
+begin
+  PUT_LINE("Begin STATGRMR");
+  MAIN;
+end STATGRMR;

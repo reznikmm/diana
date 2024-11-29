@@ -1,0 +1,568 @@
+with SEMGLOB; use SEMGLOB;
+with SETUTIL; use SETUTIL;
+with DEFUTIL; use DEFUTIL;
+
+package body REQUTIL is
+
+    function GET_BASE_STRUCT(TYPE_SPEC: TREE) return TREE is
+	BASE_STRUCT:	TREE;
+	BASE_ID:	TREE;
+	BASE_REGION:	TREE;
+    begin
+
+	-- as a first approximation, base structure is the base type
+	BASE_STRUCT := GET_BASE_TYPE(TYPE_SPEC);
+
+	-- if it's a possible full type for a private type
+	if KIND(BASE_STRUCT) in CLASS_DERIVABLE_SPEC
+        or else KIND(BASE_STRUCT) = DN_INCOMPLETE then
+
+	    -- get the identifier associated with the type declaration
+	    BASE_ID := D(XD_SOURCE_NAME, BASE_STRUCT);
+
+	    -- if it's an [l_]private_type_id
+            -- and we're not already looking at the private spec
+            -- (Note: full type spec could be a different private)
+	    if KIND(BASE_ID) in DN_PRIVATE_TYPE_ID .. DN_L_PRIVATE_TYPE_ID
+            and then D(SM_TYPE_SPEC, BASE_ID) /= BASE_STRUCT then
+
+		-- if it was not defined in an enclosing package
+		-- (Note: lx_symrep(base_region) --> not enclosing)
+		BASE_REGION := D(XD_REGION, BASE_ID);
+		if ( KIND(BASE_REGION) /= DN_PACKAGE_ID
+			and then ( KIND(BASE_REGION) /= DN_GENERIC_ID
+				or else KIND(D(SM_SPEC,BASE_REGION))
+					/= DN_PACKAGE_SPEC ) )
+		or else KIND(D(LX_SYMREP, BASE_REGION)) /= DN_SYMBOL_REP
+	        or else DI(XD_LEX_LEVEL, GET_DEF_FOR_ID(BASE_REGION)) <= 0
+		then
+
+		    -- the structure is the private node
+		    BASE_STRUCT := D(SM_TYPE_SPEC, BASE_ID);
+		end if;
+	    end if;
+	end if;
+
+	-- return the base structure
+	return BASE_STRUCT;
+
+    end GET_BASE_STRUCT;
+
+
+    function GET_ANCESTOR_TYPE(TYPE_SPEC: TREE) return TREE is
+	TYPE_STRUCT: TREE := GET_BASE_STRUCT(TYPE_SPEC);
+    begin
+	while KIND(TYPE_STRUCT) in CLASS_DERIVABLE_SPEC
+	and then D(SM_DERIVED, TYPE_STRUCT) /= CONST_VOID loop
+	    TYPE_STRUCT := GET_BASE_STRUCT(D(SM_DERIVED, TYPE_STRUCT));
+	end loop;
+	return GET_BASE_TYPE(TYPE_STRUCT);
+    end GET_ANCESTOR_TYPE;
+
+
+    function IS_MEMBER_OF_UNSPECIFIED
+			( SPEC_TYPE: TREE
+			; UNSPEC_TYPE: TREE )
+	    return BOOLEAN
+    is
+	UNSPEC_KIND:	    NODE_NAME := KIND(UNSPEC_TYPE);
+	SPEC_STRUCT:	    TREE;
+	SPEC_KIND:	    NODE_NAME;
+    begin
+	if UNSPEC_KIND not in CLASS_UNSPECIFIED_TYPE then
+	    return FALSE;
+	end if;
+
+	SPEC_STRUCT := GET_BASE_STRUCT(SPEC_TYPE);
+	SPEC_KIND := KIND(SPEC_STRUCT);
+        case CLASS_UNSPECIFIED_TYPE'(UNSPEC_KIND) is
+	when DN_ANY_ACCESS =>
+	    return SPEC_KIND = DN_ACCESS or SPEC_KIND = DN_ANY_ACCESS_OF;
+	when DN_ANY_ACCESS_OF =>
+	    if SPEC_KIND = DN_ANY_ACCESS_OF then
+		return D(XD_ITEM, UNSPEC_TYPE) = D(XD_ITEM, SPEC_TYPE);
+	    elsif SPEC_KIND = DN_ACCESS then
+		return D(XD_ITEM, UNSPEC_TYPE)
+			= GET_BASE_TYPE(D(SM_DESIG_TYPE, SPEC_STRUCT));
+	    else
+		-- (False if spec_type is access)
+		return FALSE;
+	    end if;
+	when DN_ANY_COMPOSITE =>
+	    return IS_NONLIMITED_COMPOSITE_TYPE(SPEC_TYPE);
+	when DN_ANY_STRING =>
+	    return IS_STRING_TYPE(SPEC_TYPE);
+	when DN_ANY_INTEGER =>
+	    return SPEC_KIND = DN_INTEGER
+		    or SPEC_KIND = DN_UNIVERSAL_INTEGER;
+	when DN_ANY_REAL =>
+	    return SPEC_KIND = DN_FLOAT
+		    or SPEC_KIND = DN_FIXED
+		    or SPEC_KIND = DN_UNIVERSAL_REAL;
+
+	end case;
+    end IS_MEMBER_OF_UNSPECIFIED;
+
+
+    function IS_NONLIMITED_COMPOSITE_TYPE (TYPE_SPEC: TREE) return BOOLEAN is
+	TYPE_KIND: NODE_NAME;
+    begin
+	TYPE_KIND := KIND(GET_BASE_STRUCT(TYPE_SPEC));
+	if TYPE_KIND = DN_ANY_STRING then
+	    return TRUE;
+	elsif TYPE_KIND = DN_ARRAY or else TYPE_KIND = DN_RECORD then
+	    return IS_NONLIMITED_TYPE(TYPE_SPEC);
+	else
+	    return FALSE;
+	end if;
+    end IS_NONLIMITED_COMPOSITE_TYPE;
+
+
+    function IS_STRING_TYPE (TYPE_SPEC: TREE) return BOOLEAN is
+	TYPE_STRUCT: TREE := GET_BASE_STRUCT(TYPE_SPEC);
+    begin
+	if KIND(TYPE_STRUCT) = DN_ANY_STRING then
+	    return TRUE;
+	elsif KIND(TYPE_STRUCT) = DN_ARRAY
+	and then IS_EMPTY(TAIL(LIST(D(SM_INDEX_S, TYPE_STRUCT)))) then
+	    return IS_CHARACTER_TYPE
+		    (GET_BASE_TYPE(D(SM_COMP_TYPE,TYPE_STRUCT)));
+	else
+	    return FALSE;
+	end if;
+    end IS_STRING_TYPE;
+
+
+    function IS_CHARACTER_TYPE (TYPE_SPEC: TREE) return BOOLEAN is
+	TYPE_STRUCT: TREE := GET_BASE_STRUCT(TYPE_SPEC);
+	ENUM_LIST:	SEQ_TYPE;
+	ENUM_ID:	TREE;
+    begin
+	if KIND(TYPE_STRUCT) /= DN_ENUMERATION then
+	    return FALSE;
+	end if;
+
+	-- $$$$ need a faster test for type deriv from predef character
+	ENUM_LIST := LIST(D(SM_LITERAL_S, TYPE_SPEC));
+	while not IS_EMPTY(ENUM_LIST) loop
+	    POP(ENUM_LIST, ENUM_ID);
+	    if KIND(ENUM_ID) = DN_CHARACTER_ID then
+		return TRUE;
+	    end if;
+	end loop;
+
+	return FALSE;
+    end IS_CHARACTER_TYPE;
+
+
+    procedure REQUIRE_SAME_TYPES
+		( EXP_1:	TREE
+		; TYPESET_1:	TYPESET_TYPE
+		; EXP_2:	TREE
+		; TYPESET_2:	TYPESET_TYPE
+		; TYPESET_OUT:	out TYPESET_TYPE )
+    is
+	TYPESET_1_WORK: 	TYPESET_TYPE := TYPESET_1;
+	TYPEINTERP_1:		TYPEINTERP_TYPE;
+	TYPE_SPEC_1:		TREE;
+	TYPESET_2_WORK: 	TYPESET_TYPE;
+	TYPEINTERP_2:		TYPEINTERP_TYPE;
+	TYPE_SPEC_2:		TREE;
+	NEW_TYPESET:		TYPESET_TYPE := EMPTY_TYPESET;
+
+    begin -- REQUIRE_SAME_TYPES
+	if IS_EMPTY(TYPESET_1) or else IS_EMPTY(TYPESET_2) then
+	    TYPESET_OUT := EMPTY_TYPESET;
+	    return;
+	end if;
+
+	while not IS_EMPTY(TYPESET_1_WORK) loop
+	    POP(TYPESET_1_WORK, TYPEINTERP_1);
+	    TYPE_SPEC_1 := GET_TYPE(TYPEINTERP_1);
+	    TYPESET_2_WORK := TYPESET_2;
+	    while not IS_EMPTY(TYPESET_2_WORK) loop
+		POP(TYPESET_2_WORK, TYPEINTERP_2);
+		TYPE_SPEC_2 := GET_TYPE(TYPEINTERP_2);
+		if TYPE_SPEC_1 = TYPE_SPEC_2
+		or else IS_MEMBER_OF_UNSPECIFIED
+				(TYPE_SPEC_1, TYPE_SPEC_2)
+		then
+		    ADD_EXTRAINFO(TYPEINTERP_1, TYPEINTERP_2);
+		    ADD_TO_TYPESET(NEW_TYPESET, TYPEINTERP_1);
+		elsif IS_MEMBER_OF_UNSPECIFIED
+				(TYPE_SPEC_2, TYPE_SPEC_1)
+		then
+		    ADD_EXTRAINFO(TYPEINTERP_2, TYPEINTERP_1);
+		    ADD_TO_TYPESET(NEW_TYPESET, TYPEINTERP_2);
+		end if;
+	    end loop;
+	end loop;
+
+	if IS_EMPTY(NEW_TYPESET) then
+	    ERROR(D(LX_SRCPOS,EXP_1), "Expressions must be of the same type");
+	end if;
+	TYPESET_OUT := NEW_TYPESET;
+    end REQUIRE_SAME_TYPES;
+
+
+    procedure REQUIRE_TYPE
+		( TYPE_SPEC:	TREE
+		; EXP:		TREE
+		; TYPESET:	in out TYPESET_TYPE )
+    is
+	TYPE_STRUCT:	TREE;
+	TYPEINTERP:	TYPEINTERP_TYPE;
+	TYPE_NODE:	TREE;
+	TYPE_KIND:	NODE_NAME;
+	NEW_TYPESET:	TYPESET_TYPE := EMPTY_TYPESET;
+    begin
+	if IS_EMPTY(TYPESET) then
+	    return;
+	end if;
+
+	while not IS_EMPTY(TYPESET) loop
+	    POP(TYPESET, TYPEINTERP);
+	    TYPE_NODE := GET_TYPE(TYPEINTERP);
+	    if TYPE_NODE = TYPE_SPEC then
+		ADD_TO_TYPESET(NEW_TYPESET, TYPEINTERP);
+	    else
+		TYPE_KIND := KIND(TYPE_NODE);
+		if TYPE_KIND in CLASS_UNSPECIFIED_TYPE then
+		    TYPE_STRUCT := GET_BASE_STRUCT(TYPE_SPEC);
+                    case CLASS_UNSPECIFIED_TYPE'(TYPE_KIND) is
+		    when DN_ANY_ACCESS =>
+			if KIND(TYPE_STRUCT) = DN_ACCESS then
+			    ADD_TO_TYPESET
+				    ( NEW_TYPESET
+				    , TYPE_SPEC
+				    , GET_EXTRAINFO(TYPEINTERP) );
+			end if;
+		    when DN_ANY_COMPOSITE =>
+			if IS_NONLIMITED_COMPOSITE_TYPE(TYPE_SPEC) then
+			    ADD_TO_TYPESET
+				    ( NEW_TYPESET
+				    , TYPE_SPEC
+				    , GET_EXTRAINFO(TYPEINTERP) );
+			end if;
+		    when DN_ANY_STRING =>
+			if IS_STRING_TYPE(TYPE_SPEC) then
+			    ADD_TO_TYPESET
+				    ( NEW_TYPESET
+				    , TYPE_SPEC
+				    , GET_EXTRAINFO(TYPEINTERP) );
+			end if;
+		    when DN_ANY_ACCESS_OF =>
+			if KIND(TYPE_STRUCT) = DN_ACCESS
+			and then GET_BASE_TYPE(D(SM_DESIG_TYPE, TYPE_STRUCT))
+				 = GET_BASE_TYPE(D(XD_ITEM, TYPE_NODE))
+			then
+			    ADD_TO_TYPESET
+				    ( NEW_TYPESET
+				    , TYPE_SPEC
+				    , GET_EXTRAINFO(TYPEINTERP) );
+			end if;
+		    when DN_ANY_INTEGER =>
+			if IS_INTEGER_TYPE(TYPE_SPEC) then
+			    ADD_TO_TYPESET
+				    ( NEW_TYPESET
+				    , TYPE_SPEC
+				    , GET_EXTRAINFO(TYPEINTERP) );
+			end if;
+		    when DN_ANY_REAL =>
+			if IS_REAL_TYPE(TYPE_SPEC) then
+			    ADD_TO_TYPESET
+				    ( NEW_TYPESET
+				    , TYPE_SPEC
+				    , GET_EXTRAINFO(TYPEINTERP) );
+			end if;
+		    end case;
+		end if;
+	    end if;
+	end loop;
+
+	TYPESET := NEW_TYPESET;
+	if IS_EMPTY(TYPESET) then
+            ERROR(D(LX_SRCPOS,EXP), "Exp not of required type");
+	end if;
+    end REQUIRE_TYPE;
+
+
+    function IS_NONLIMITED_TYPE(ITEM: TREE) return BOOLEAN is
+
+	TYPE_SPEC:	constant TREE := GET_BASE_STRUCT(ITEM);
+
+
+	function GET_VARIABLE_TYPE_SPEC(VARIABLE_DECL: TREE) return TREE is
+	    SOURCE_NAME_LIST: SEQ_TYPE
+		    := LIST(D(AS_SOURCE_NAME_S,VARIABLE_DECL));
+	begin
+	    return GET_BASE_TYPE(D(SM_OBJ_TYPE, HEAD(SOURCE_NAME_LIST)));
+	end GET_VARIABLE_TYPE_SPEC;
+
+
+	function IS_NONLIMITED_COMP_LIST(COMP_LIST: TREE) return BOOLEAN is
+	    ITEM_LIST:		SEQ_TYPE := LIST(COMP_LIST);
+	    ITEM:		TREE;
+	    DECL_LIST:		SEQ_TYPE;
+	    DECL:		TREE;
+	    VARIANT_PART:	TREE;
+	    VARIANT_LIST:	SEQ_TYPE;
+	    VARIANT:		TREE;
+	begin
+	    while not IS_EMPTY(ITEM_LIST) loop
+		POP(ITEM_LIST, ITEM);
+		DECL_LIST := LIST(D(AS_DECL_S,ITEM));
+		while not IS_EMPTY(DECL_LIST) loop
+		    POP(DECL_LIST, DECL);
+		    if KIND(DECL) = DN_VARIABLE_DECL then
+			if not IS_NONLIMITED_TYPE(GET_VARIABLE_TYPE_SPEC(DECL))
+			then
+			    return FALSE;
+			end if;
+		    end if;
+		end loop;
+		VARIANT_PART := D(AS_VARIANT_PART, ITEM);
+		if KIND(VARIANT_PART) = DN_VARIANT_PART then
+		    VARIANT_LIST := LIST(D(AS_VARIANT_S, VARIANT_PART));
+		    while not IS_EMPTY(VARIANT_LIST) loop
+			POP(VARIANT_LIST, VARIANT);
+			if KIND(VARIANT) = DN_VARIANT then
+			    if not IS_NONLIMITED_COMP_LIST
+				    ( D(AS_COMP_LIST, VARIANT) )
+			    then
+				return FALSE;
+
+			    end if;
+			end if;
+		    end loop;
+		end if;
+	    end loop;
+	    return TRUE;
+	end IS_NONLIMITED_COMP_LIST;
+
+    begin -- Is_Nonlimited_Type
+
+	if TYPE_SPEC = CONST_VOID then
+	    return TRUE;
+	end if;
+
+        case CLASS_TYPE_SPEC'(KIND(TYPE_SPEC)) is
+	when DN_TASK_SPEC | DN_L_PRIVATE | DN_INCOMPLETE =>
+	    return FALSE;
+	when DN_RECORD =>
+	    if not DB(SM_IS_LIMITED, TYPE_SPEC) then
+		return TRUE;
+	    else
+		return IS_NONLIMITED_COMP_LIST(D(SM_COMP_LIST, TYPE_SPEC));
+	    end if;
+	when DN_ARRAY =>
+	    if DB(SM_IS_LIMITED, TYPE_SPEC) then
+		return FALSE;
+	    else
+		return IS_NONLIMITED_TYPE(D(SM_COMP_TYPE, TYPE_SPEC));
+	    end if;
+	when others =>
+	    return TRUE;
+	end case;
+    end IS_NONLIMITED_TYPE;
+
+
+    function IS_LIMITED_TYPE(ITEM: TREE) return BOOLEAN is
+    begin
+	return not IS_NONLIMITED_TYPE(ITEM);
+    end IS_LIMITED_TYPE;
+
+
+    function IS_PRIVATE_TYPE(ITEM: TREE) return BOOLEAN is
+	-- returns True if Item is private
+	-- $$$$ worry about what this means
+	TYPE_SPEC:	constant TREE := GET_BASE_STRUCT(ITEM);
+
+    begin -- Is_Private_Type
+
+        case CLASS_TYPE_SPEC'(KIND(TYPE_SPEC)) is
+	when DN_TASK_SPEC | DN_L_PRIVATE | DN_INCOMPLETE | DN_PRIVATE =>
+	    return TRUE;
+	when DN_ARRAY =>
+	    case CLASS_TYPE_SPEC(KIND
+			( GET_BASE_STRUCT(D(SM_COMP_TYPE,TYPE_SPEC)) )) is
+	    when DN_TASK_SPEC | DN_L_PRIVATE | DN_INCOMPLETE | DN_PRIVATE =>
+		return TRUE;
+	    when others =>
+		return FALSE;
+	    end case;
+	when others =>
+	    return FALSE;
+	end case;
+    end IS_PRIVATE_TYPE;
+
+
+    function IS_INTEGER_TYPE(ITEM: TREE) return BOOLEAN is
+	TYPE_SPEC:	constant TREE := GET_BASE_STRUCT(ITEM);
+	TYPE_KIND:	constant NODE_NAME := KIND(TYPE_SPEC);
+    begin
+	return TYPE_KIND = DN_INTEGER
+	       or TYPE_KIND = DN_UNIVERSAL_INTEGER
+	       or TYPE_KIND = DN_ANY_INTEGER;
+    end IS_INTEGER_TYPE;
+
+
+    function IS_REAL_TYPE(ITEM: TREE) return BOOLEAN is
+	TYPE_SPEC:	constant TREE := GET_BASE_STRUCT(ITEM);
+	TYPE_KIND:	constant NODE_NAME := KIND(TYPE_SPEC);
+    begin
+	return TYPE_KIND = DN_FLOAT
+	       or TYPE_KIND = DN_FIXED
+	       or TYPE_KIND = DN_UNIVERSAL_REAL
+	       or TYPE_KIND = DN_ANY_REAL;
+    end IS_REAL_TYPE;
+
+
+    function IS_SCALAR_TYPE(ITEM: TREE) return BOOLEAN is
+	TYPE_SPEC:	constant TREE := GET_BASE_STRUCT(ITEM);
+	TYPE_KIND:	constant NODE_NAME := KIND(TYPE_SPEC);
+    begin
+	return TYPE_KIND in CLASS_SCALAR
+	       or TYPE_KIND = DN_UNIVERSAL_INTEGER
+	       or TYPE_KIND = DN_UNIVERSAL_REAL
+	       or TYPE_KIND in DN_ANY_INTEGER .. DN_ANY_REAL;
+    end IS_SCALAR_TYPE;
+
+
+    function IS_BOOLEAN_TYPE(ITEM: TREE) return BOOLEAN is
+    begin
+	-- type is boolean if it is derived from predefined boolean
+	return GET_ANCESTOR_TYPE(ITEM) = PREDEFINED_BOOLEAN;
+    end IS_BOOLEAN_TYPE;
+
+
+    function IS_UNIVERSAL_TYPE(ITEM: TREE) return BOOLEAN is
+	ITEM_KIND: NODE_NAME := KIND(ITEM);
+    begin
+	return ITEM_KIND = DN_UNIVERSAL_INTEGER
+		or ITEM_KIND = DN_UNIVERSAL_REAL
+		or ITEM_KIND = DN_ANY_INTEGER
+		or ITEM_KIND = DN_ANY_REAL;
+    end IS_UNIVERSAL_TYPE;
+
+
+    function IS_NON_UNIVERSAL_TYPE(ITEM: TREE) return BOOLEAN is
+    begin
+	return not IS_UNIVERSAL_TYPE(ITEM);
+    end IS_NON_UNIVERSAL_TYPE;
+
+
+    function IS_DISCRETE_TYPE(ITEM: TREE) return BOOLEAN is
+	BASE_STRUCT: TREE := GET_BASE_STRUCT(ITEM);
+    begin
+	case KIND(BASE_STRUCT) is
+	when DN_ENUMERATION | DN_INTEGER | DN_UNIVERSAL_INTEGER
+		    | DN_ANY_INTEGER =>
+	    return TRUE;
+	when others =>
+	    return FALSE;
+	end case;
+    end IS_DISCRETE_TYPE;
+
+
+    function IS_TASK_TYPE(ITEM: TREE) return BOOLEAN is
+	BASE_STRUCT: TREE := GET_BASE_STRUCT(ITEM);
+    begin
+	return KIND(BASE_STRUCT) = DN_TASK_SPEC;
+    end IS_TASK_TYPE;
+
+
+    procedure REQUIRE_ID
+		( ID_KIND:	NODE_NAME
+		; EXP:		TREE
+		; DEFSET:	in out DEFSET_TYPE )
+    is
+	DEFINTERP: DEFINTERP_TYPE;
+	NEW_DEFSET: DEFSET_TYPE := EMPTY_DEFSET;
+    begin
+	if IS_EMPTY(DEFSET) then
+	    return;
+	end if;
+
+	while not IS_EMPTY(DEFSET) loop
+	    POP(DEFSET, DEFINTERP);
+	    if KIND(D(XD_SOURCE_NAME, GET_DEF(DEFINTERP))) = ID_KIND then
+		ADD_TO_DEFSET(NEW_DEFSET, DEFINTERP);
+	    end if;
+	end loop;
+
+	DEFSET := NEW_DEFSET;
+	if IS_EMPTY(DEFSET) then
+            ERROR(D(LX_SRCPOS, EXP), "Name is not "
+                        & NODE_NAME'IMAGE(ID_KIND) );
+	end if;
+    end REQUIRE_ID;
+
+    function IS_TYPE_DEF(ITEM: TREE) return BOOLEAN is
+	ITEM_KIND: NODE_NAME := KIND(D(XD_SOURCE_NAME,ITEM));
+    begin
+	return ITEM_KIND in CLASS_TYPE_NAME;
+    end IS_TYPE_DEF;
+
+
+    function IS_ENTRY_DEF(ITEM: TREE) return BOOLEAN is
+    begin
+	return KIND(D(XD_SOURCE_NAME, ITEM)) = DN_ENTRY_ID;
+    end IS_ENTRY_DEF;
+
+
+    function IS_PROC_OR_ENTRY_DEF(ITEM: TREE) return BOOLEAN is
+	SOURCE_NAME_KIND: NODE_NAME := KIND(D(XD_SOURCE_NAME, ITEM));
+    begin
+	if SOURCE_NAME_KIND = DN_PROCEDURE_ID
+	or else SOURCE_NAME_KIND = DN_ENTRY_ID then
+	    return TRUE;
+	elsif SOURCE_NAME_KIND = DN_GENERIC_ID
+	and then KIND(D(XD_HEADER, ITEM)) = DN_PROCEDURE_SPEC
+	then
+	    return TRUE;
+	else
+	    return FALSE;
+	end if;
+    end IS_PROC_OR_ENTRY_DEF;
+
+
+    function IS_FUNCTION_OR_ARRAY_DEF(ITEM: TREE) return BOOLEAN is
+	ITEM_KIND: NODE_NAME := KIND(D(XD_SOURCE_NAME,ITEM));
+	ITEM_STRUCT: TREE;
+    begin
+	if ITEM_KIND = DN_FUNCTION_ID or ITEM_KIND = DN_OPERATOR_ID
+			or ITEM_KIND = DN_BLTN_OPERATOR_ID
+	then
+	    return TRUE;
+	elsif ITEM_KIND = DN_GENERIC_ID
+	and then KIND(D(XD_HEADER, ITEM)) = DN_FUNCTION_SPEC then
+	    return TRUE;
+	elsif ITEM_KIND in CLASS_OBJECT_NAME then
+	    ITEM_STRUCT := GET_BASE_STRUCT(D(XD_SOURCE_NAME,ITEM));
+	    if KIND(ITEM_STRUCT) = DN_ACCESS then
+		ITEM_STRUCT := GET_BASE_STRUCT(D(SM_DESIG_TYPE, ITEM_STRUCT));
+	    end if;
+	    return KIND(ITEM_STRUCT) = DN_ARRAY;
+	else
+	    return FALSE;
+	end if;
+    end IS_FUNCTION_OR_ARRAY_DEF;
+
+
+    function IS_FUNCTION_OR_ENUMERATION_DEF(ITEM: TREE) return BOOLEAN is
+	ITEM_KIND: NODE_NAME := KIND(D(XD_SOURCE_NAME,ITEM));
+	ITEM_STRUCT: TREE;
+    begin
+	if ITEM_KIND = DN_FUNCTION_ID or ITEM_KIND = DN_OPERATOR_ID
+			or ITEM_KIND = DN_BLTN_OPERATOR_ID
+			or ITEM_KIND = DN_ENUMERATION_ID
+	then
+	    return TRUE;
+	else
+	    return FALSE;
+	end if;
+    end IS_FUNCTION_OR_ENUMERATION_DEF;
+
+
+end REQUTIL;

@@ -1,0 +1,309 @@
+with TEXT2_IO, USERPK, LALRIDL, DIANAMAN, TERMLIST;
+use  TEXT2_IO, USERPK, LALRIDL, DIANAMAN, TERMLIST;
+procedure INITGRMR is
+
+  USER_ROOT:	TREE;
+  GRAMMAR:	TREE;
+  GR_RULE_SEQ:	SEQ_TYPE;
+
+  MORE_PASSES:	BOOLEAN;  -- indicates change made in trans close pass
+  PASS: 	INTEGER := 0;
+
+  procedure MAIN;
+  procedure INITIALIZE;
+  procedure TRANS_CLOSE;
+  procedure CHECK_GRAMMAR;
+  function SAME(L1, L2: SEQ_TYPE) return BOOLEAN;
+
+  procedure MAIN is
+  begin
+    OPEN_DIANA;
+    USER_ROOT := D(XD_USER_ROOT, CONST_ROOT);
+    GRAMMAR := D(XD_GRAMMAR, USER_ROOT);
+    GR_RULE_SEQ := LIST(GRAMMAR);
+
+    PUT_LINE("Initialize.");
+    INITIALIZE;
+
+    loop
+      PASS := PASS + 1;
+      PUT("Begin trans close pass ");PUT(PASS,1);PUT('.');NEW_LINE;
+      MORE_PASSES := FALSE;
+      TRANS_CLOSE;
+      exit
+	when not MORE_PASSES;
+    end loop;
+
+    PUT_LINE("Check grammar.");
+    CHECK_GRAMMAR;
+
+    CLOSE_DIANA;
+  end MAIN;
+
+  procedure INITIALIZE is
+    RULE_SEQ:	SEQ_TYPE := GR_RULE_SEQ;
+    RULE:	TREE;
+    RULE_INIT_LIST: SEQ_TYPE;
+    RULEINFO:	TREE;
+    ALT_SEQ:	SEQ_TYPE;
+    ALT:	TREE;
+    SYL_SEQ:	SEQ_TYPE;
+    SYL:	TREE;
+    IS_NULLABLE:  BOOLEAN;	  -- current rule has nullable alt
+    GENS_TER_STR: BOOLEAN;	  -- current rule has terminal alt
+    ALT_NOT_NULLABLE: BOOLEAN;	  -- alt found to be not nullable
+    ALT_NOT_GEN_TER_STR: BOOLEAN; -- alt found to be not terminaln
+    NONTER_NAME: TREE;		  -- symbol_rep of non-terminal
+    NONTER_DEF_LIST: SEQ_TYPE;
+    RULE_COUNT: INTEGER := 0;
+    INIT_NONTER_S:	TREE;
+  begin
+    while not IS_EMPTY(RULE_SEQ) loop
+      RULE := HEAD(RULE_SEQ); RULE_SEQ := TAIL(RULE_SEQ);
+      RULE_COUNT := RULE_COUNT + 1;
+--@     PUT_LINE(PRINTNAME(D(XD_NAME,RULE)));
+
+      RULE_INIT_LIST := MAKE;
+      RULEINFO := MAKE(DN_RULEINFO);
+      DI(XD_RULE_NBR, RULEINFO, RULE_COUNT);
+      DI(XD_TIMECHANGED, RULEINFO, 0);
+      DI(XD_TIMECHECKED, RULEINFO, 0);
+
+      INIT_NONTER_S := MAKE(DN_RULE_S);
+      LIST(INIT_NONTER_S, INSERT(MAKE, RULE));
+      D(XD_INIT_NONTER_S, RULEINFO, INIT_NONTER_S);
+
+      DB(XD_IS_REACHABLE, RULEINFO, FALSE);
+      D(XD_RULEINFO, RULE, RULEINFO);
+      IS_NULLABLE := FALSE;
+      GENS_TER_STR := FALSE;
+
+      ALT_SEQ := LIST(RULE);
+      while not IS_EMPTY(ALT_SEQ) loop
+	ALT := HEAD(ALT_SEQ); ALT_SEQ := TAIL(ALT_SEQ);
+	D(XD_RULE, ALT, RULE);
+
+	ALT_NOT_NULLABLE := FALSE;
+	ALT_NOT_GEN_TER_STR := FALSE;
+	SYL_SEQ := LIST(ALT);
+	if not IS_EMPTY(SYL_SEQ) then
+	  SYL := HEAD(SYL_SEQ);
+	  if KIND(SYL) = DN_TERMINAL then
+	    RULE_INIT_LIST := UNION(RULE_INIT_LIST, SYL);
+	  end if;
+	  while not IS_EMPTY (SYL_SEQ) loop
+	    SYL := HEAD(SYL_SEQ); SYL_SEQ := TAIL(SYL_SEQ);
+	    if KIND(SYL) = DN_TERMINAL then
+	      ALT_NOT_NULLABLE := TRUE;
+            else -- since it's DN_NONTERMINAL
+	      NONTER_NAME := D(XD_SYMREP, SYL);
+	      NONTER_DEF_LIST := LIST(NONTER_NAME);
+	      while not IS_EMPTY(NONTER_DEF_LIST)
+	      and then KIND(HEAD(NONTER_DEF_LIST)) /= DN_RULE loop
+		NONTER_DEF_LIST := TAIL(NONTER_DEF_LIST);
+	      end loop;
+	      if IS_EMPTY (NONTER_DEF_LIST) then
+		ERROR(D(LX_SRCPOS,SYL),
+		      "Non-terminal not defined - "&PRINTNAME(NONTER_NAME));
+		D(XD_RULE, SYL, CONST_VOID);
+		ALT_NOT_NULLABLE := TRUE;
+	      else
+		D(XD_RULE, SYL, HEAD(NONTER_DEF_LIST));
+		-- assume the worst about the non-terminal for now
+		ALT_NOT_NULLABLE := TRUE;
+		ALT_NOT_GEN_TER_STR := TRUE;
+	      end if;
+	    end if;
+	  end loop;
+	end if;
+	if not ALT_NOT_NULLABLE then
+	  IS_NULLABLE := TRUE;
+	end if;
+	if not ALT_NOT_GEN_TER_STR then
+	  GENS_TER_STR := TRUE;
+	end if;
+      end loop;
+
+      LIST(RULEINFO,RULE_INIT_LIST);
+      DB(XD_GENS_TER_STR, RULEINFO, GENS_TER_STR);
+      DB(XD_IS_NULLABLE, RULE, IS_NULLABLE);
+    end loop;
+    -- First rule is always reachable
+    DB(XD_IS_REACHABLE,D(XD_RULEINFO,HEAD(GR_RULE_SEQ)),TRUE);
+  end INITIALIZE;
+
+  procedure TRANS_CLOSE is
+    RULE_SEQ:	SEQ_TYPE := GR_RULE_SEQ;
+    RULE:	TREE;
+    RULE_INIT_LIST: SEQ_TYPE;
+    RULEINFO:	TREE;
+    ALT_SEQ:	SEQ_TYPE;
+    ALT:	TREE;
+    SYL_SEQ:	SEQ_TYPE;
+    SYL:	TREE;
+    IS_NULLABLE:  BOOLEAN;	  -- current rule has nullable alt
+    IS_REACHABLE: BOOLEAN;	  -- current rule is reachable
+    GENS_TER_STR: BOOLEAN;	  -- current rule has terminal alt
+    ALT_NOT_NULLABLE: BOOLEAN;	  -- alt found to be not nullable
+    ALT_NOT_GEN_TER_STR: BOOLEAN; -- alt found to be not terminaln
+    NONTER_RULE: TREE;
+    NONTER_INFO: TREE;
+    TIMECHANGED: INTEGER;
+    TIMECHECKED: INTEGER;
+    NONTER_CHANGED: INTEGER;
+    CHANGE_FLAG:  BOOLEAN;   -- rule changed in this pass
+    INIT_NONTER_S:   TREE;
+    INIT_NONTER_SEQ: SEQ_TYPE;
+
+  begin
+    while not IS_EMPTY(RULE_SEQ) loop
+      RULE := HEAD(RULE_SEQ); RULE_SEQ := TAIL(RULE_SEQ);
+--@   PUT_LINE(PRINTNAME(D(XD_NAME,RULE)));
+
+      RULEINFO := D(XD_RULEINFO,RULE);
+      TIMECHANGED := DI(XD_TIMECHANGED, RULEINFO);
+      TIMECHECKED := DI(XD_TIMECHECKED, RULEINFO);
+      DI(XD_TIMECHECKED, RULEINFO, PASS);
+
+      RULE_INIT_LIST := LIST(RULEINFO);
+      IS_REACHABLE := DB(XD_IS_REACHABLE, RULEINFO);
+      IS_NULLABLE := FALSE;    -- we'll see if it changes
+      GENS_TER_STR := DB(XD_GENS_TER_STR, RULEINFO);
+      INIT_NONTER_S := D(XD_INIT_NONTER_S, RULEINFO);
+      INIT_NONTER_SEQ := LIST(INIT_NONTER_S);
+      CHANGE_FLAG := FALSE;
+
+      ALT_SEQ := LIST(RULE);
+      while not IS_EMPTY(ALT_SEQ) loop
+	ALT := HEAD(ALT_SEQ); ALT_SEQ := TAIL(ALT_SEQ);
+
+	ALT_NOT_NULLABLE := FALSE;
+	ALT_NOT_GEN_TER_STR := FALSE;
+	SYL_SEQ := LIST(ALT);
+	if not IS_EMPTY (SYL_SEQ) then
+	  SYL := HEAD(SYL_SEQ);
+	  if KIND(SYL) = DN_NONTERMINAL then
+	    NONTER_RULE := D(XD_RULE, SYL);
+	    if KIND(NONTER_RULE) /= DN_VOID then
+	      INIT_NONTER_SEQ := R_UNION(INIT_NONTER_SEQ,
+		    LIST(D(XD_INIT_NONTER_S, D(XD_RULEINFO, NONTER_RULE))));
+	    end if;
+	  end if;
+	end if;
+	while not IS_EMPTY (SYL_SEQ) loop
+	  SYL := HEAD(SYL_SEQ); SYL_SEQ := TAIL(SYL_SEQ);
+	  if KIND(SYL) = DN_TERMINAL then
+	    if not ALT_NOT_NULLABLE then
+	      ALT_NOT_NULLABLE := TRUE;
+	      if TIMECHANGED >= TIMECHECKED then -- otherwise already done
+		RULE_INIT_LIST := UNION(RULE_INIT_LIST,SYL);
+	      end if;
+	    end if;
+          else -- since it's DN_NONTERMINAL
+	    NONTER_RULE := D(XD_RULE,SYL);
+	    if KIND(NONTER_RULE) = DN_VOID then
+	      ALT_NOT_NULLABLE := TRUE;
+	    else
+	      NONTER_INFO := D(XD_RULEINFO,NONTER_RULE);
+	      NONTER_CHANGED := DI(XD_TIMECHANGED,NONTER_INFO);
+	      if TIMECHANGED >= TIMECHECKED
+	      and then IS_REACHABLE
+	      and then not DB(XD_IS_REACHABLE,NONTER_INFO) then
+		MORE_PASSES := TRUE;
+		DB(XD_IS_REACHABLE,NONTER_INFO,TRUE);
+		DI(XD_TIMECHANGED, NONTER_INFO, PASS);
+	      end if;
+	      if not ALT_NOT_NULLABLE then
+		if not DB(XD_IS_NULLABLE,NONTER_RULE) then
+		  ALT_NOT_NULLABLE := TRUE;
+		else
+		  if NONTER_CHANGED > TIMECHANGED then
+		    -- keep looking if nonter became nullable
+		    TIMECHANGED := NONTER_CHANGED;
+		  end if;
+		end if;
+		if NONTER_CHANGED >= TIMECHECKED then
+		  RULE_INIT_LIST := UNION (RULE_INIT_LIST,LIST(NONTER_INFO));
+		end if;
+	      end if;
+	      if not ALT_NOT_GEN_TER_STR
+	      and then not GENS_TER_STR
+	      and then not DB(XD_GENS_TER_STR,NONTER_INFO) then
+		ALT_NOT_GEN_TER_STR := TRUE;
+	      end if;
+	    end if;
+	  end if;
+          exit -- because there is no information we don't already know
+	    when ALT_NOT_NULLABLE
+	    and then GENS_TER_STR
+	    and then TIMECHANGED < TIMECHECKED;
+	end loop;
+	if not ALT_NOT_NULLABLE then
+	  IS_NULLABLE := TRUE;
+	end if;
+	if not ALT_NOT_GEN_TER_STR then
+	  GENS_TER_STR := TRUE;
+	end if;
+      end loop;
+
+      if not SAME(LIST(RULEINFO), RULE_INIT_LIST) then
+	LIST(RULEINFO,RULE_INIT_LIST);
+	CHANGE_FLAG := TRUE;
+--@	PUT("initials--");
+--@	PUT_LINE(PRINTNAME(D(XD_NAME,RULE)));
+      end if;
+      if not SAME(LIST(INIT_NONTER_S), INIT_NONTER_SEQ) then
+	LIST(INIT_NONTER_S, INIT_NONTER_SEQ);
+	CHANGE_FLAG := TRUE;
+--@	PUT("nonters--");
+--@	PUT_LINE(PRINTNAME(D(XD_NAME,RULE)));
+      end if;
+      if GENS_TER_STR and then not DB(XD_GENS_TER_STR, RULEINFO) then
+	DB(XD_GENS_TER_STR, RULEINFO, TRUE);
+	CHANGE_FLAG := TRUE;
+--@	PUT("gens-ter--");
+--@	PUT_LINE(PRINTNAME(D(XD_NAME,RULE)));
+      end if;
+      if IS_NULLABLE and then not DB(XD_IS_NULLABLE, RULE) then
+	DB(XD_IS_NULLABLE, RULE, TRUE);
+	CHANGE_FLAG := TRUE;
+--@	PUT("nullable--");
+--@	PUT_LINE(PRINTNAME(D(XD_NAME,RULE)));
+      end if;
+      if CHANGE_FLAG then
+	DI(XD_TIMECHANGED, RULEINFO, PASS);
+	MORE_PASSES := TRUE;
+      end if;
+    end loop;
+  end TRANS_CLOSE;
+
+  procedure CHECK_GRAMMAR is
+    RULE_SEQ:	SEQ_TYPE := GR_RULE_SEQ;
+    RULE:	TREE;
+    RULEINFO:	TREE;
+  begin
+    while not IS_EMPTY(RULE_SEQ) loop
+      RULE := HEAD(RULE_SEQ); RULE_SEQ := TAIL(RULE_SEQ);
+--@     PUT_LINE(PRINTNAME(D(XD_NAME,RULE)));
+
+      RULEINFO := D(XD_RULEINFO,RULE);
+      if not DB(XD_IS_REACHABLE, RULEINFO) then
+	ERROR(D(LX_SRCPOS,RULE),
+	      "Rule cannot be reached - "&PRINTNAME(D(XD_NAME,RULE)));
+      end if;
+      if not DB(XD_GENS_TER_STR, RULEINFO) then
+	ERROR(D(LX_SRCPOS,RULE),
+	      "Does not gen terminal string - "&PRINTNAME(D(XD_NAME,RULE)));
+      end if;
+    end loop;
+  end CHECK_GRAMMAR;
+
+  function SAME(L1, L2: SEQ_TYPE) return BOOLEAN is
+  begin
+    return L1.H = L2.H;
+  end SAME;
+
+begin
+  PUT_LINE("Begin INITGRMR");
+  MAIN;
+end INITGRMR;

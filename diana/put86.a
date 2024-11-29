@@ -1,0 +1,383 @@
+with TEXT_IO; use  TEXT_IO;
+with LOADDTBL; use LOADDTBL;
+
+procedure PUT86 is   --  Generates the Ada package spec and body for DIANA86
+
+  package ATTR_INDEX_IO is new TEXT_IO.INTEGER_IO(ATTR_INDEX_TYPE);
+  use ATTR_INDEX_IO;
+  procedure P(a: string) renames text_io.put_line;
+
+  RESULT_FILE: TEXT_IO.FILE_TYPE;
+
+  ASSERTION_ERROR: exception;
+
+  procedure PUT_HEADING (is_body: boolean) is
+  begin -- PUT_HEADING
+    if not is_body then
+      PUT_LINE ("with USERPK; use USERPK;");
+      PUT_LINE ("--following with clause to make compile order tools work");
+      PUT_LINE("with DIANAMAN, REPNODE;");
+      PUT_LINE ("package DIANA86 is");
+    else
+      PUT_LINE ("with DIANAMAN; use DIANAMAN;");
+      PUT_LINE ("with REPNODE;");
+      PUT_LINE ("package body DIANA86 is");
+    end if;
+    NEW_LINE;
+  end PUT_HEADING;
+
+  procedure PUT_NODE_NAMES is
+  begin
+    PUT_LINE ("  type NODE_NAME is");
+    for NODE_INDEX in 0 .. LAST_NODE loop
+      if NODE_INDEX = 0 then
+        PUT (ASCII.HT & "( DN_");
+      else
+        PUT (ASCII.HT & ", DN_");
+      end if;
+      PUT_LINE (UPPER_CASE( NODE_ID(NODE_INDEX).all));
+    end loop;
+    PUT_LINE ("    );");
+    NEW_LINE;
+  end PUT_NODE_NAMES;
+
+  procedure PUT_ATTRIBUTES (IS_BODY: BOOLEAN) is
+  begin
+
+    NEW_LINE;
+    for ATTR_INDEX in 0 .. LAST_ATTR loop
+      if ATTR_ID(ATTR_INDEX) = null then
+	SET_OUTPUT(STANDARD_OUTPUT);
+        PUT("Null attribute name .. ");
+        PUT_LINE(ATTR_INDEX_TYPE'IMAGE(ATTR_INDEX));
+	raise ASSERTION_ERROR;
+      end if;
+      if attr_kind(attr_index) /= 'S' then
+        put("    function ");
+	PUT (UPPER_CASE( ATTR_ID(ATTR_INDEX).all));
+        put(" (T: TREE) return ");
+        if attr_kind(attr_index) = 'A' then
+          put("TREE");
+        elsif attr_kind(attr_index) = 'B' then
+          put ("BOOLEAN");
+	else
+          put ("INTEGER");
+	end if;
+	if not IS_BODY then
+            put(';');
+	else
+            put_line(" is");
+            put(ascii.ht & "begin");
+            put(" return D");
+            if attr_kind(attr_index) /= 'A' then
+		put(attr_kind(attr_index));
+	    end if;
+            put('(');
+	    put(attr_index, width => 0);
+            put(", T);");
+            put(" end;");
+	end if;
+	new_line;
+        put("    procedure ");
+	PUT (UPPER_CASE( ATTR_ID(ATTR_INDEX).all));
+        put(" (T: TREE; V: ");
+        if attr_kind(attr_index) = 'A' then
+          put("TREE");
+        elsif attr_kind(attr_index) = 'B' then
+          put ("BOOLEAN");
+	else
+          put ("INTEGER");
+	end if;
+        put(')');
+	if not IS_BODY then
+            put(';');
+	else
+            put_line(" is");
+            put(ascii.ht & "begin");
+            put(" D");
+            if attr_kind(attr_index) /= 'A' then
+		put(attr_kind(attr_index));
+	    end if;
+            put('(');
+	    put(attr_index, width => 0);
+            put(", T, V);");
+            put(" end;");
+	end if;
+	new_line;
+      end if;
+    end loop;
+    NEW_LINE;
+  end PUT_ATTRIBUTES;
+
+  procedure PUT_CLASSES is
+  begin
+    for CLASS_INDEX in 0 .. LAST_CLASS loop
+      PUT("  subtype Class_");
+      PUT(UPPER_CASE(CLASS_ID(CLASS_INDEX).all));
+      PUT(" is NODE_NAME");
+      if NODE_ID(CLASS_LOW(CLASS_INDEX))'LENGTH
+            + NODE_ID(CLASS_HIGH(CLASS_INDEX))'LENGTH + 18 + COL >= 80
+      then
+	new_line;
+        put(ascii.ht & "range DN_");
+      else
+        put(" range DN_");
+      end if;
+      PUT(UPPER_CASE(NODE_ID(CLASS_LOW(CLASS_INDEX)).all));
+      PUT(" .. DN_");
+      PUT(UPPER_CASE(NODE_ID(CLASS_HIGH(CLASS_INDEX)).all));
+      PUT_LINE(";");
+    end loop;
+    NEW_LINE;
+  end PUT_CLASSES;
+
+  procedure PUT_PROCEDURE_SPECS is
+  begin
+    p("    procedure CREATE_DIANA;");
+    p("    procedure OPEN_DIANA;");
+    p("    procedure CLOSE_DIANA;");
+    new_line;
+    p("    function MAKE (C: in NODE_NAME) return TREE;");
+    p("    -- procedure DESTROY (t: in TREE);");
+    p("    function KIND (T: in TREE) return NODE_NAME;");
+    new_line;
+    p("    CONST_FALSE: constant TREE := ");
+    p("            (TPG => 0, TTY => NODE_NAME'POS(DN_FALSE), TLN => 0);");
+    p("    CONST_TRUE: constant TREE := ");
+    p("            (TPG => 0, TTY => NODE_NAME'POS(DN_TRUE), TLN => 0);");
+    p("    CONST_NIL: constant TREE := ");
+    p("            (TPG => 0, TTY => NODE_NAME'POS(DN_NIL), TLN => 0);");
+    p("    CONST_VOID: constant TREE := ");
+    p("            (TPG => 0, TTY => NODE_NAME'POS(DN_VOID), TLN => 0);");
+    p("    CONST_ROOT: constant TREE := ");
+    p("            (TPG => 1, TTY => NODE_NAME'POS(DN_ROOT), TLN => 1);");
+    p("    CONST_VIRGIN: constant TREE"
+                  & " := (TPG => SHORT(-1), TTY =>255 , TLN => 255);");
+    p("    CONST_BINARY_ZERO: constant TREE"
+                  & " := (TPG => 0, TTY => 0, TLN => 0);");
+    new_line;
+    p("    function ARITY (T: in TREE)      return ARITIES;");
+    p("    function SON1 (T: in TREE)       return TREE;");
+    p("    procedure SON1 (T: in TREE; V: in TREE);");
+    p("    function SON2 (T: in TREE)       return TREE;");
+    p("    procedure SON2 (T: in TREE; V: in TREE);");
+    p("    function SON3 (T: in TREE)       return TREE;");
+    p("    procedure SON3 (T: in TREE; V: in TREE);");
+    new_line;
+    p("    function HEAD (L: in SEQ_TYPE)   return TREE;");
+    p("    function TAIL (L: in SEQ_TYPE)   return SEQ_TYPE;");
+    p("    function MAKE                    return SEQ_TYPE;");
+    p("    function IS_EMPTY (L: in SEQ_TYPE) return BOOLEAN;");
+    p("    function INSERT (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE;");
+    p("    function APPEND (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE;");
+    p("    -- make a one-element list");
+    p("    function SINGLETON (V: TREE) return SEQ_TYPE;");
+    p("    -- remove and return first element on list");
+    p("    procedure POP (L: in out SEQ_TYPE; T: out TREE);");
+    new_line;
+    p("    procedure LIST (T: in TREE; V: in SEQ_TYPE);");
+    p("    function LIST (T: in TREE)       return SEQ_TYPE;");
+    new_line;
+    p("    function PRINTNAME(T: TREE) return STRING; -- txtrep or symbol_rep");
+    p("    function STORETEXT(V: PNAME) return TREE; -- stores a txtrep");
+    p("    function STORESYM (V: PNAME) return TREE; -- adds to sym tbl");
+    p("    function FINDSYM (V: PNAME) return TREE; -- void if not there");
+    p("    function STORETEXT(V: STRING) return TREE; -- stores a txtrep");
+    p("    function STORESYM (V: STRING) return TREE; -- adds to sym tbl");
+    p("    function FINDSYM (V: STRING) return TREE; -- void if not there");
+    new_line;
+    p("    function MAKE_SOURCE_POSITION (T: TREE; COL: NATURAL) return TREE;");
+    p("    function GET_SOURCE_LINE (T:TREE) return TREE;");
+    p("    function GET_SOURCE_COL (T:TREE) return NATURAL;");
+    p("    procedure ERROR (SP: TREE; MSG: STRING);");
+    p("    procedure WARNING (SP: TREE; MSG: STRING);");
+    new_line;
+    p("    -- node representation - for debug use");
+    p("    function NODE_REP (NODE: TREE) return STRING;");
+  end PUT_PROCEDURE_SPECS;
+
+  procedure PUT_PROCEDURE_BODIES is
+  begin
+    p("    procedure CREATE_DIANA is");
+    p("    begin");
+    p("        DIANAMAN.CREATE_IDL(""DIANA"");");
+    p("    end;");
+    p("    procedure OPEN_DIANA is");
+    p("    begin");
+    p("        DIANAMAN.OPEN_IDL(""DIANA"");");
+    p("    end;");
+    p("    procedure CLOSE_DIANA is");
+    p("    begin");
+    p("        DIANAMAN.CLOSE_DIANA;");
+    p("    end;");
+    new_line;
+    p("    function MAKE (C: in NODE_NAME) return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.MAKE(NODE_NAME'POS(C));");
+    p("    end;");
+    p("    function KIND (T: in TREE) return NODE_NAME is");
+    p("    begin");
+    p("        if (T.TPG >= 0");
+    p("                and then T.TTY <= NODE_NAME'POS(NODE_NAME'LAST))");
+    p("        or else (T.TLN = 0 and then "
+                       & "T.TTY = NODE_NAME'POS(DN_NUM_VAL)) then");
+    p("            return NODE_NAME'VAL(T.TTY);");
+    p("        else");
+    p("            QUIT(""KIND: invalid tree "" & NODE_REP(T));");
+    p("        end if;");
+    p("    end;");
+    new_line;
+    p("    function ARITY (T: in TREE)      return ARITIES is");
+    p("    begin");
+    p("        return DIANAMAN.ARITY(T);");
+    p("    end;");
+    p("    function SON1 (T: in TREE)       return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.SON1(T);");
+    p("    end;");
+    p("    procedure SON1 (T: in TREE; V: in TREE) is");
+    p("    begin");
+    p("        DIANAMAN.SON1(T, V);");
+    p("    end;");
+    p("    function SON2 (T: in TREE)       return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.SON2(T);");
+    p("    end;");
+    p("    procedure SON2 (T: in TREE; V: in TREE) is");
+    p("    begin");
+    p("        DIANAMAN.SON2(T, V);");
+    p("    end;");
+    p("    function SON3 (T: in TREE)       return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.SON3(T);");
+    p("    end;");
+    p("    procedure SON3 (T: in TREE; V: in TREE) is");
+    p("    begin");
+    p("        DIANAMAN.SON3(T, V);");
+    p("    end;");
+    new_line;
+    p("    function HEAD (L: in SEQ_TYPE)   return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.HEAD(L);");
+    p("    end;");
+    p("    function TAIL (L: in SEQ_TYPE)   return SEQ_TYPE is");
+    p("    begin");
+    p("        return DIANAMAN.TAIL(L);");
+    p("    end;");
+    p("    function MAKE                    return SEQ_TYPE is");
+    p("    begin");
+    p("        return DIANAMAN.MAKE;");
+    p("    end;");
+    p("    function IS_EMPTY (L: in SEQ_TYPE) return BOOLEAN is");
+    p("    begin");
+    p("        return DIANAMAN.IS_EMPTY(L);");
+    p("    end;");
+    p("    function INSERT (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE is");
+    p("    begin");
+    p("        return DIANAMAN.INSERT(L, T);");
+    p("    end;");
+    p("    function APPEND (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE is");
+    p("    begin");
+    p("        return DIANAMAN.APPEND(L, T);");
+    p("    end;");
+    p("    function SINGLETON (V: TREE) return SEQ_TYPE is");
+    p("    begin");
+    p("        return DIANAMAN.SINGLETON(V);");
+    p("    end;");
+    p("    procedure POP (L: in out SEQ_TYPE; T: out TREE) is");
+    p("    begin");
+    p("        DIANAMAN.POP(L, T);");
+    p("    end;");
+    new_line;
+    p("    procedure LIST (T: in TREE; V: in SEQ_TYPE) is");
+    p("    begin");
+    p("        DIANAMAN.LIST(T, V);");
+    p("    end;");
+    p("    function LIST (T: in TREE)       return SEQ_TYPE is");
+    p("    begin");
+    p("        return DIANAMAN.LIST(T);");
+    p("    end;");
+    new_line;
+    p("    function PRINTNAME(T: TREE) return STRING is");
+    p("    begin");
+    p("        return DIANAMAN.PRINTNAME(T);");
+    p("    end;");
+    p("    function STORETEXT(V: PNAME) return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.STORETEXT(V);");
+    p("    end;");
+    p("    function STORESYM (V: PNAME) return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.STORESYM(V);");
+    p("    end;");
+    p("    function FINDSYM (V: PNAME) return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.FINDSYM(V);");
+    p("    end;");
+    p("    function STORETEXT(V: STRING) return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.STORETEXT(V);");
+    p("    end;");
+    p("    function STORESYM (V: STRING) return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.STORESYM(V);");
+    p("    end;");
+    p("    function FINDSYM (V: STRING) return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.FINDSYM(V);");
+    p("    end;");
+    new_line;
+    p("    function MAKE_SOURCE_POSITION (T: TREE; COL: NATURAL) return TREE");
+    p("    is");
+    p("    begin");
+    p("        return DIANAMAN.MAKE_SOURCE_POSITION(T, COL);");
+    p("    end;");
+    p("    function GET_SOURCE_LINE (T:TREE) return TREE is");
+    p("    begin");
+    p("        return DIANAMAN.GET_SOURCE_LINE(T);");
+    p("    end;");
+    p("    function GET_SOURCE_COL (T:TREE) return NATURAL is");
+    p("    begin");
+    p("        return DIANAMAN.GET_SOURCE_COL(T);");
+    p("    end;");
+    p("    procedure ERROR (SP: TREE; MSG: STRING) is");
+    p("    begin");
+    p("        DIANAMAN.ERROR(SP, MSG);");
+    p("    end;");
+    p("    procedure WARNING (SP: TREE; MSG: STRING) is");
+    p("    begin");
+    p("        DIANAMAN.WARNING(SP, MSG);");
+    p("    end;");
+    new_line;
+    p("    function NODE_REP (NODE: TREE) return STRING is");
+    p("    begin");
+    p("        return REPNODE.NODE_REP(NODE);");
+    p("    end;");
+  end PUT_PROCEDURE_BODIES;
+
+
+begin -- PUT86
+  READ_TABLE;
+
+  CREATE(RESULT_FILE, NAME => "DIANA.NEW");
+  SET_OUTPUT(RESULT_FILE);
+
+  PUT_LINE("-- This file contains specification and body of DIANA86");
+  NEW_LINE;
+  PUT_HEADING(is_body => false);
+  PUT_NODE_NAMES;
+  PUT_CLASSES;
+  put_attributes(is_body => false);
+  put_procedure_specs;
+  PUT_LINE ("end DIANA86;");
+  new_line;
+  put_line("--================================================");
+  new_line;
+  PUT_HEADING(is_body => true);
+  put_attributes(is_body => true);
+  put_procedure_bodies;
+  PUT_LINE ("end DIANA86;");
+
+  SET_OUTPUT(STANDARD_OUTPUT);
+  CLOSE(RESULT_FILE);
+end PUT86;

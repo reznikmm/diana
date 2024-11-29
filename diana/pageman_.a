@@ -1,0 +1,62 @@
+with USERPK; use USERPK;
+package PAGEMAN is
+
+  -- This package manages reading and writing of virtual-memory pages
+  -- It is called when a needed page is not in memory
+
+  MAX_VPG: constant  := 24_000;
+  MAX_RPG: constant  := 2000;
+  MAX_AREA: constant := 10;
+
+  subtype VPG_DES is INTEGER range 0 .. MAX_VPG;
+  subtype VPG_NBR is INTEGER range 1 .. MAX_VPG;
+  subtype RPG_DES is INTEGER range -MAX_RPG .. MAX_RPG;
+  subtype RPG_NONNEG is RPG_DES range 0 .. MAX_RPG;
+  subtype RPG_NBR is RPG_DES range 1 .. MAX_RPG;
+  subtype AREA_DES is INTEGER range 0 .. MAX_AREA;
+  subtype AREA_NBR is INTEGER range 1 .. MAX_AREA;
+
+  -- VPG.RP gives real page number for a virtual page.	Value is > 0
+  -- for active page, < 0 for inactive page still in main memory,
+  -- 0 for page not in memory or not assigned
+  HIGH_VPG: INTEGER range 0 .. MAX_VPG; -- last assigned
+  type VPG_DATA is
+    record
+      RP: RPG_DES;
+    end record;
+
+  VPG: array (VPG_NBR) of VPG_DATA;
+
+  -- RPG is array containing info about and content of real pages
+  type ACCESS_SECTOR is access SECTOR;
+  type RPG_DATA is
+    record
+      VP:	VPG_DES;
+      AREA:	AREA_DES;
+      CHANGED:	BOOLEAN;
+      DATA:	ACCESS_SECTOR;
+    end record;
+
+  RPG: array (RPG_NBR) of RPG_DATA;
+
+  -- AREA data for insertion of new records in an area
+  type AREA_DATA is
+    record
+      NVP:	VPG_DES;
+      NLN:	LINE_DES;
+      SAVE_NLN: LINE_DES;
+    end record;
+
+  AREA: array (AREA_NBR) of AREA_DATA;
+
+  procedure CREATE_PAGE_MANAGER;   -- creates new work file
+
+  procedure OPEN_PAGE_MANAGER;	   -- attaches old work file
+
+  function READ_PAGE(VP: VPG_NBR) return RPG_NBR;
+
+  procedure ALLOC_PAGE(AR: AREA_NBR; SZ: NATURAL);
+
+  procedure CLOSE_PAGE_MANAGER;    -- forces pages out and closes
+
+end PAGEMAN;

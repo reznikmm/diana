@@ -1,0 +1,35 @@
+with USERPK; use  USERPK;
+with DIANAMAN; use DIANAMAN;
+with SEMGLOB; use SEMGLOB;
+package DEFUTIL is
+
+    function MAKE_DEF_FOR_ID(ID: TREE; H: H_TYPE) return TREE;
+    procedure CHECK_UNIQUE_SOURCE_NAME_S(SOURCE_NAME_S: TREE);
+    procedure CHECK_CONSTANT_ID_S(SOURCE_NAME_S: TREE; H: H_TYPE);
+    function GET_DEF_FOR_ID(ID: TREE) return TREE;
+    function GET_PRIOR_DEF(DEF: TREE) return TREE;
+    function GET_PRIOR_HOMOGRAPH_DEF (DEF: TREE)
+	    return TREE;
+    function GET_PRIOR_HOMOGRAPH_DEF
+		( DEF: TREE
+		; PARAM_S: TREE
+		; RESULT_TYPE: TREE := CONST_VOID )
+	    return TREE;
+    function GET_DEF_IN_REGION(ID: TREE; H: H_TYPE) return TREE;
+    procedure CHECK_UNIQUE_DEF (SOURCE_DEF: TREE);
+    procedure CHECK_CONSTANT_DEF (SOURCE_DEF: TREE; H: H_TYPE);
+    procedure CHECK_TYPE_DEF (SOURCE_DEF: TREE; H: H_TYPE);
+    function ARE_HOMOGRAPH_HEADERS(HEADER_1, HEADER_2: TREE) return BOOLEAN;
+    function IS_SAME_PARAMETER_PROFILE (PARAM_S_1, PARAM_S_2: TREE)
+		    return BOOLEAN;
+    procedure CONFORM_PARAMETER_LISTS(PARAM_S_1, PARAM_S_2: TREE);
+    function IS_COMPATIBLE_EXPRESSION (EXP_1, EXP_2: TREE) return BOOLEAN;
+    procedure MAKE_DEF_VISIBLE(DEF: TREE; HEADER: TREE := CONST_VOID);
+    procedure MAKE_DEF_IN_ERROR(DEF: TREE);
+    procedure REMOVE_DEF_FROM_ENVIRONMENT(DEF: TREE);
+
+    function GET_DEF_EXP_TYPE(DEF: TREE) return TREE;
+    function GET_BASE_TYPE(TYPE_SPEC_OR_EXP_OR_ID: TREE) return TREE;
+    function GET_BASE_PACKAGE(PACKAGE_ID: TREE) return TREE;
+
+end DEFUTIL;

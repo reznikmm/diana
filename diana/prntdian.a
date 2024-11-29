@@ -1,0 +1,261 @@
+with TEXT2_IO, DIANAMAN, DIANATBL, USERPK, DIANA, DIANATTR, PRINTNOD;
+use  TEXT2_IO, DIANAMAN, DIANATBL, USERPK, DIANA, DIANATTR, PRINTNOD;
+procedure PRNTDIAN is
+
+  VIRGIN_TREE : TREE;
+
+  STR_FIRST: BYTE;-- := BYTE(NODE_NAME'POS(DN_PRAGMA));
+  STR_LAST:  BYTE;-- := BYTE(NODE_NAME'POS(DN_CODE));
+  ZERO_BYTE: BYTE := BYTE'VAL(0);
+
+  procedure MAIN;
+  procedure PRINT_DIANA (T:TREE; IND:NATURAL);
+  procedure MAYBE_NON_STRUCT_ATTR (A_SUB: INTEGER; T: TREE; IND:INTEGER;
+	PARENT: TREE);
+  procedure PRINT_NON_STRUCT_ATTR (A_SUB: INTEGER; T: TREE; IND:INTEGER);
+  procedure PRINT_STRUCT_ATTR (A_SUB: INTEGER; T: TREE; IND:INTEGER);
+  procedure INDENT (IND: INTEGER);
+
+  ----------------------------------------------------------------------
+
+  procedure MAIN is
+    USER_ROOT: TREE;
+  begin
+    OPEN_DIANA;
+    USER_ROOT := D(XD_USER_ROOT, CONST_ROOT);
+    PRINT_DIANA(D(XD_STRUCTURE, USER_ROOT), 0);
+    NEW_LINE;
+    --CLOSE_DIANA;
+  end MAIN;
+
+  procedure PRINT_DIANA (T:TREE; IND:NATURAL) is
+    TTYP: INTEGER;
+    A_SUB: INTEGER;
+    NBR_STR_CHILDREN: INTEGER;
+    SPOS: TREE;
+    T_ARITY: ARITIES;
+  begin
+    --put_line("Print_Diana");
+    PRINT_TREE(T);
+    --put_line("back from PRINT_TREE");
+    if T.TPG < 0 or else T.TLN = ZERO_BYTE then
+      null; -- no attributes and not structural
+    else
+      TTYP := INTEGER(T.TTY);
+      A_SUB := N_SPEC(TTYP).NS_FIRST_A;
+      if T.TTY in STR_FIRST .. STR_LAST then
+	-- It is a structural node
+	-- Print source position
+	SPOS := D(LX_SRCPOS, T);
+        PUT(" (");
+	if SPOS.TPG < 0
+	and then INTEGER(SPOS.TLN) in 1 .. 254 then
+	  PUT(DI(XD_NUMBER,GET_SOURCE_LINE(SPOS)), 0);
+          PUT(',');
+	  PUT(GET_SOURCE_COL(SPOS), 0);
+	else
+	  PRINT_TREE(SPOS);
+	end if;
+        PUT(')');
+	-- How many struct attributes?
+	T_ARITY := N_SPEC(TTYP).NS_ARITY;
+	if T_ARITY = ARBITRARY then
+	  NBR_STR_CHILDREN := 1;
+	else
+          NBR_STR_CHILDREN := ARITIES'POS(T_ARITY);
+	end if;
+      else
+	-- not structural
+	T_ARITY := NULLARY;
+	NBR_STR_CHILDREN := 0;
+      -- Print attributes of this node
+      end if;
+      for I in NBR_STR_CHILDREN + 1 .. N_SPEC(TTYP).NS_SIZE loop
+        if A_SPEC(A_SUB + I - 1).AS_ATNBR /= ATTRIBUTE_NAME'POS(LX_SRCPOS) then
+	  MAYBE_NON_STRUCT_ATTR(A_SUB + I - 1, DABS(I, T), IND, T);
+	end if;
+      end loop;
+      for I in 1 .. NBR_STR_CHILDREN loop
+	PRINT_STRUCT_ATTR(A_SUB + I - 1, DABS(I, T), IND);
+      end loop;
+    end if;
+  end PRINT_DIANA;
+
+  procedure MAYBE_NON_STRUCT_ATTR (A_SUB: INTEGER; T: TREE; IND:INTEGER;
+	PARENT: TREE) is
+    PARENT_KIND : NODE_NAME := KIND(PARENT);
+    ATNBR: INTEGER := A_SPEC(A_SUB).AS_ATNBR;
+    A_KIND: ATTRIBUTE_NAME := ATTRIBUTE_NAME'VAL(abs ATNBR);
+  begin
+    if T = CONST_VIRGIN then
+      null;
+    elsif PARENT_KIND = DN_COMPILATION_UNIT then
+      if A_KIND = XD_WITH_LIST
+      then
+        PRINT_STRUCT_ATTR(A_SUB, T, IND);
+        return;
+      end if;
+    elsif A_KIND = SM_OBJ_TYPE or A_KIND = SM_INIT_EXP then
+      if PARENT_KIND in CLASS_OBJECT_NAME
+      and then D(SM_OBJ_TYPE, PARENT).TPG > 0
+      and then KIND(D(SM_OBJ_TYPE, PARENT)) in CLASS_DERIVABLE_SPEC
+      and then D(XD_SOURCE_NAME, D(SM_OBJ_TYPE, PARENT)) = PARENT then
+        PRINT_STRUCT_ATTR(A_SUB, T, IND);
+        return;
+      end if;
+    elsif A_KIND = XD_NOT_EQUAL then
+      PRINT_STRUCT_ATTR(A_SUB, T, IND);
+      return;
+    elsif A_KIND = SM_TYPE_SPEC then
+      if PARENT_KIND in CLASS_TYPE_NAME
+      and then D(XD_SOURCE_NAME, T) = PARENT then
+        PRINT_STRUCT_ATTR(A_SUB, T, IND);
+        return;
+      end if;
+    elsif A_KIND = SM_BASE_TYPE then
+      if T /= PARENT
+      and then PARENT_KIND in CLASS_DERIVABLE_SPEC
+      and then D(XD_SOURCE_NAME, T) = D(XD_SOURCE_NAME, PARENT)
+      then
+        PRINT_STRUCT_ATTR(A_SUB, T, IND);
+        return;
+      end if;
+    elsif A_KIND = SM_DERIVED then
+      if PARENT_KIND in CLASS_DERIVABLE_SPEC then
+        PRINT_STRUCT_ATTR(A_SUB, T, IND);
+        return;
+      end if;
+    end if;
+    PRINT_NON_STRUCT_ATTR(A_SUB, T, IND);
+  end;
+
+  procedure PRINT_NON_STRUCT_ATTR (A_SUB: INTEGER; T: TREE; IND:INTEGER) is
+    ATNBR: INTEGER := A_SPEC(A_SUB).AS_ATNBR;
+  begin
+    INDENT(IND);
+    declare
+      AN_SPEC_I:  A_NAME_DATA renames AN_SPEC(abs ATNBR);
+    begin
+      PUT(PRINTNAME(MAKE_TREE(INTEGER(AN_SPEC_I.AN_NAME_PG),
+                  NODE_NAME'POS(DN_TXTREP), INTEGER(AN_SPEC_I.AN_NAME_LN))));
+    end;
+    if ATNBR >= 0
+    and then T.TTY /= NODE_NAME'POS(DN_LIST) then
+      PUT(": ");
+      if T.TPG > 0 and then INTEGER(T.TTY) = NODE_NAME'POS(DN_REAL_VAL) then
+        PRINT_TREE(D(XD_NUMER,T));PUT('/');PRINT_TREE(D(XD_DENOM,T));
+      else
+	PRINT_TREE(T);
+      end if;
+      if T.TPG > 0 and then INTEGER(T.TTY) = NODE_NAME'POS(DN_SYMBOL_REP)
+      then
+        PUT(' ');
+	PUT(PRINTNAME(T));
+      end if;
+    else -- It is a list
+      declare
+	SQ:  SEQ_TYPE;
+      begin
+	SQ.H := T;
+	SQ.T := CONST_NIL;
+	if IS_EMPTY(SQ) then
+          PUT(": < >");
+	elsif IS_EMPTY(TAIL(SQ)) then
+          PUT(": < ");
+	  PRINT_TREE(HEAD(SQ));
+          PUT(" >");
+	else
+	  INDENT(IND);
+          PUT("< ");
+	  PRINT_TREE(HEAD(SQ));
+	  SQ := TAIL(SQ);
+	  while not IS_EMPTY(SQ) loop
+	    INDENT(IND+2);
+	    PRINT_TREE(HEAD(SQ));
+	    SQ := TAIL(SQ);
+	  end loop;
+          PUT(" >");
+	end if;
+      end;
+    end if;
+  end PRINT_NON_STRUCT_ATTR;
+
+  procedure PRINT_STRUCT_ATTR (A_SUB: INTEGER; T: TREE; IND:INTEGER) is
+    ATNBR: INTEGER := A_SPEC(A_SUB).AS_ATNBR;
+    FIRST_WORD: TREE;
+  begin
+    INDENT(IND);
+    declare
+      AN_SPEC_I:  A_NAME_DATA renames AN_SPEC(abs ATNBR);
+    begin
+      PUT(PRINTNAME(MAKE_TREE(INTEGER(AN_SPEC_I.AN_NAME_PG),
+                  NODE_NAME'POS(DN_TXTREP), INTEGER(AN_SPEC_I.AN_NAME_LN))));
+    end;
+    if ATNBR >= 0 then
+      -- It is not a list
+      if T.TPG <= 0
+      or else (T.TTY not in STR_FIRST .. STR_LAST 
+               and then NODE_NAME'VAL(T.TTY) not in CLASS_DERIVABLE_SPEC)
+      then
+        PUT(": ");
+	PRINT_TREE(T);
+      else
+        PUT(": ");
+	PRINT_DIANA(T,IND+2);
+      end if;
+    else -- It is a list
+      declare
+	SQ:  SEQ_TYPE;
+      begin
+	SQ.H := T;
+	SQ.T := CONST_NIL;
+	if IS_EMPTY(SQ) then
+          PUT(": < >");
+	else
+	  declare
+	    HD: TREE := HEAD(SQ);
+	  begin
+	    if IS_EMPTY(TAIL(SQ)) then
+              PUT(": < ");
+	      PRINT_DIANA(HD, IND+2);
+              PUT(" >");
+	    else
+              PUT(':');
+	      INDENT(IND);
+              PUT("< ");
+	      PRINT_DIANA(HD, IND+4);
+	      SQ := TAIL(SQ);
+	      while not IS_EMPTY(SQ) loop
+		INDENT(IND+2);
+		PRINT_DIANA(HEAD(SQ), IND+4);
+		SQ := TAIL(SQ);
+	      end loop;
+              PUT(" >");
+	    end if;
+	  end;
+	end if;
+      end;
+    end if;
+  end PRINT_STRUCT_ATTR;
+
+  procedure INDENT (IND: INTEGER) is
+    II:  INTEGER := IND;
+  begin
+    NEW_LINE;
+    while II >= 8 loop
+      PUT("      | ");  --''
+      II := II - 8;
+    end loop;
+    for I in 1 .. II loop
+      PUT(' ');
+    end loop;
+  end INDENT;
+
+begin
+  VIRGIN_TREE.TPG := -1;
+  VIRGIN_TREE.TTY := BYTE'(255);
+  VIRGIN_TREE.TLN := BYTE'(255);
+  STR_FIRST := BYTE(NODE_NAME'POS(CLASS_ALL_SOURCE'FIRST));
+  STR_LAST := BYTE(NODE_NAME'POS(CLASS_ALL_SOURCE'LAST));
+  MAIN;
+end PRNTDIAN;

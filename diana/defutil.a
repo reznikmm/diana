@@ -1,0 +1,693 @@
+with TEXT2_IO; use TEXT2_IO; -- for debug
+with VISUTIL; use VISUTIL; -- for debug (node_rep)
+with DIANA, DIANATTR;
+use  DIANA, DIANATTR;
+with EXPRESO; use EXPRESO; -- for get_name_defn
+
+package body DEFUTIL is
+
+    function HEADER_IS_HOMOGRAPH
+		( HEADER_1 : TREE
+		; PARAM_S_2: TREE
+		; RESULT_TYPE_2: TREE := CONST_VOID )
+	    return BOOLEAN;
+
+    ------------------------------------------------------------------------
+
+
+    function MAKE_DEF_FOR_ID(ID: TREE; H: H_TYPE) return TREE is
+	SYMREP: constant TREE := D(LX_SYMREP, ID);
+	DEF:	TREE := MAKE(DN_DEF);
+    begin
+	if H.REGION_DEF /= CONST_VOID
+	and then KIND(ID) in CLASS_SOURCE_NAME then
+	    D(XD_REGION, ID, D(XD_SOURCE_NAME, H.REGION_DEF));
+	end if;
+
+	D(XD_HEADER, DEF, CONST_TRUE);
+	D(XD_SOURCE_NAME, DEF, ID);
+	D(XD_REGION_DEF, DEF, H.REGION_DEF);
+	DB(XD_IS_IN_SPEC, DEF, H.IS_IN_SPEC);
+	DB(XD_IS_USED, DEF, FALSE);
+	DI(XD_LEX_LEVEL, DEF, 0);
+
+	LIST(SYMREP, INSERT(LIST(SYMREP), DEF));
+	return DEF;
+    end MAKE_DEF_FOR_ID;
+
+
+    procedure CHECK_UNIQUE_SOURCE_NAME_S(SOURCE_NAME_S: TREE) is
+	-- check a sequence of newly declared source names for uniqueness
+
+	SOURCE_NAME_LIST: SEQ_TYPE := LIST(SOURCE_NAME_S);
+	SOURCE_NAME:	  TREE;
+    begin
+	-- for each source_name in the sequence
+	while not IS_EMPTY(SOURCE_NAME_LIST) loop
+	    POP(SOURCE_NAME_LIST, SOURCE_NAME);
+
+	    -- get the corresponding def node and check for uniqueness
+	    CHECK_UNIQUE_DEF(GET_DEF_FOR_ID(SOURCE_NAME));
+	end loop;
+    end CHECK_UNIQUE_SOURCE_NAME_S;
+
+
+    procedure CHECK_CONSTANT_ID_S(SOURCE_NAME_S: TREE; H: H_TYPE) is
+        -- check a sequence of newly declared constant id's for prior decl
+
+	SOURCE_NAME_LIST: SEQ_TYPE := LIST(SOURCE_NAME_S);
+	SOURCE_NAME:	  TREE;
+    begin
+	-- for each source_name in the sequence
+	while not IS_EMPTY(SOURCE_NAME_LIST) loop
+	    POP(SOURCE_NAME_LIST, SOURCE_NAME);
+
+	    -- get the corresponding def node and check for prior decl
+	    CHECK_CONSTANT_DEF(GET_DEF_FOR_ID(SOURCE_NAME), H);
+	end loop;
+    end CHECK_CONSTANT_ID_S;
+
+
+    function GET_DEF_FOR_ID(ID: TREE) return TREE is
+	DEFLIST:	SEQ_TYPE := LIST(D(LX_SYMREP,ID));
+	DEF:		TREE;
+    begin
+	while not IS_EMPTY(DEFLIST) loop
+	    POP(DEFLIST, DEF);
+
+	    if D(XD_SOURCE_NAME, DEF) = ID then
+		return DEF;
+	    end if;
+	end loop;
+
+        QUIT("No def for id - " & PRINTNAME(D(LX_SYMREP,ID)));
+    end GET_DEF_FOR_ID;
+
+
+    function GET_PRIOR_DEF(DEF: TREE) return TREE is
+	REGION_DEF:	constant TREE := D(XD_REGION_DEF, DEF);
+	HEADER: 	constant TREE := D(XD_HEADER, DEF);
+	DEFLIST:	SEQ_TYPE := LIST(D(LX_SYMREP, D(XD_SOURCE_NAME,DEF)));
+	PRIOR_DEF:	TREE;
+    begin
+	while not IS_EMPTY(DEFLIST) loop
+	    POP(DEFLIST, PRIOR_DEF);
+	    if PRIOR_DEF /= DEF
+	    and then D(XD_REGION_DEF, PRIOR_DEF) = REGION_DEF then
+		return PRIOR_DEF;
+	    end if;
+	end loop;
+
+	return CONST_VOID;
+    end GET_PRIOR_DEF;
+
+    function GET_PRIOR_HOMOGRAPH_DEF (DEF: TREE)
+	    return TREE
+    is
+	HEADER: TREE := D(XD_HEADER, DEF);
+    begin
+	if KIND(HEADER) = DN_FUNCTION_SPEC then
+	    return GET_PRIOR_HOMOGRAPH_DEF
+			( DEF
+			, D(AS_PARAM_S,HEADER)
+			, D(AS_NAME, HEADER) );
+	else -- since it is a procedure_spec or an entry
+	    return GET_PRIOR_HOMOGRAPH_DEF
+			( DEF
+			, D(AS_PARAM_S,HEADER) );
+	end if;
+    end GET_PRIOR_HOMOGRAPH_DEF;
+
+    function GET_PRIOR_HOMOGRAPH_DEF
+		( DEF: TREE
+		; PARAM_S: TREE
+		; RESULT_TYPE: TREE := CONST_VOID )
+	    return TREE
+    is
+	-- note: does NOT find derived and builtin subprograms
+	REGION_DEF:	constant TREE := D(XD_REGION_DEF, DEF);
+	DEFLIST:	SEQ_TYPE := LIST(D(LX_SYMREP, D(XD_SOURCE_NAME,DEF)));
+	PRIOR_DEF:	TREE;
+    begin
+	while not IS_EMPTY(DEFLIST) loop
+	    POP(DEFLIST, PRIOR_DEF);
+	    if PRIOR_DEF /= DEF
+	    and then KIND(D(XD_SOURCE_NAME,PRIOR_DEF)) /= DN_BLTN_OPERATOR_ID
+	    and then KIND(D(XD_SOURCE_NAME,PRIOR_DEF)) not in CLASS_ENUM_LITERAL
+	    and then D(XD_REGION_DEF, PRIOR_DEF) = REGION_DEF
+	    and then HEADER_IS_HOMOGRAPH
+			( D(XD_HEADER, PRIOR_DEF)
+			, PARAM_S
+			, RESULT_TYPE )
+	    and then ( KIND(D(XD_SOURCE_NAME,PRIOR_DEF))
+			    not in CLASS_SUBPROG_NAME
+		    or else KIND(D(SM_UNIT_DESC ,D(XD_SOURCE_NAME,PRIOR_DEF)))
+			    /= DN_DERIVED_SUBPROG )
+	    then
+		return PRIOR_DEF;
+	    end if;
+	end loop;
+
+	return CONST_VOID;
+    end GET_PRIOR_HOMOGRAPH_DEF;
+
+
+    function GET_DEF_IN_REGION(ID: TREE; H: H_TYPE) return TREE
+    is
+	REGION_DEF:	constant TREE := H.REGION_DEF;
+	DEFLIST:	SEQ_TYPE := LIST(D(LX_SYMREP, ID));
+	PRIOR_DEF:	TREE;
+    begin
+	if DEBUG then
+	    PUT("Get_Def_In_Region: ");PUT(NODE_REP(ID));PUT(' ');
+	    PUT(NODE_REP(REGION_DEF));PUT(' ');
+	    PUT_LINE(PRINTNAME(D(LX_SYMREP,ID)));
+	end if;
+	while not IS_EMPTY(DEFLIST) loop
+	    POP(DEFLIST, PRIOR_DEF);
+	     if DEBUG then
+		PUT("... "); PUT(NODE_REP(PRIOR_DEF));PUT(' ');
+		PUT_LINE(NODE_REP(D(XD_REGION_DEF,PRIOR_DEF)));
+	     end if;
+	    if D(XD_REGION_DEF, PRIOR_DEF) = REGION_DEF then
+		if DEBUG then
+		    PUT_LINE("... -- accepted");
+		end if;
+		return PRIOR_DEF;
+	    end if;
+	end loop;
+
+	return CONST_VOID;
+    end GET_DEF_IN_REGION;
+
+
+
+    procedure CHECK_UNIQUE_DEF (SOURCE_DEF: TREE) is
+	PRIOR_DEF:	constant TREE := GET_PRIOR_DEF(SOURCE_DEF);
+	SOURCE_NAME:	TREE;
+    begin
+	if PRIOR_DEF /= CONST_VOID then
+	    SOURCE_NAME := D(XD_SOURCE_NAME, SOURCE_DEF);
+	    ERROR(D(LX_SRCPOS, SOURCE_NAME)
+                    , "Definition is not unique - "
+		      & PRINTNAME(D(LX_SYMREP, SOURCE_NAME)));
+	    D(XD_HEADER, SOURCE_DEF, CONST_FALSE);
+	else
+	    D(XD_HEADER, SOURCE_DEF, CONST_VOID);
+	end if;
+    end CHECK_UNIQUE_DEF;
+
+
+    procedure CHECK_CONSTANT_DEF (SOURCE_DEF: TREE; H: H_TYPE) is
+	SOURCE_ID:	constant TREE := D(XD_SOURCE_NAME, SOURCE_DEF);
+	PRIOR_DEF:	TREE;
+	PRIOR_ID:	TREE;
+    begin
+	-- if we are not in private part of a package
+	if (H.IS_IN_SPEC) or (H.IS_IN_BODY) then
+
+	    -- check for uniqueness and return
+	    CHECK_UNIQUE_DEF(SOURCE_DEF);
+	    return;
+	end if;
+
+	-- get prior def, if any
+	PRIOR_DEF := GET_PRIOR_DEF(SOURCE_DEF);
+	if PRIOR_DEF = CONST_VOID then
+	    MAKE_DEF_VISIBLE(SOURCE_DEF);
+	    return;
+	else
+	    PRIOR_ID := D(XD_SOURCE_NAME, PRIOR_DEF);
+	end if;
+
+	-- if prior def is not for a deferred constant
+	-- which does not yet have a full declaration
+	if KIND(PRIOR_ID) /= DN_CONSTANT_ID
+	or else D(SM_INIT_EXP, PRIOR_ID) /= CONST_VOID
+	then
+
+	    -- repeat uniqueness check to put out error message and return
+	    CHECK_UNIQUE_DEF(SOURCE_DEF);
+	    return;
+	end if;
+
+	-- yes, it is a full declaration of a deferred constant
+
+	-- check conformance of discriminant lists
+        -- and remove def's for duplicated names
+	-- $$$$$$ stub -- must do this check --- $$$$$$$
+--	if KIND(D(SM_TYPE_SPEC, SOURCE_ID)) = DN_RECORD then
+--	    CONFORM_PARAMETER_LISTS
+--		    ( D(SM_DISCRIMINANT_S, PRIOR_ID)
+--		    , D(SM_DISCRIMINANT_S, SOURCE_ID) );
+--	else
+--	    CONFORM_PARAMETER_LISTS
+--		    ( D(SM_DISCRIMINANT_S, PRIOR_ID)
+--		    , CONST_VOID );
+--	end if;
+
+	-- make source def visible and return
+	REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+	D(SM_FIRST, SOURCE_ID, PRIOR_ID);
+	return;
+    end CHECK_CONSTANT_DEF;
+
+    procedure CHECK_TYPE_DEF (SOURCE_DEF: TREE; H: H_TYPE) is
+	PRIOR_DEF:	constant TREE := GET_PRIOR_DEF(SOURCE_DEF);
+
+	SOURCE_ID:	TREE;
+	PRIOR_ID:	TREE;
+
+    begin
+	-- if there is no prior def then
+	if PRIOR_DEF = CONST_VOID then
+
+	    -- make source def visible and return
+	    MAKE_DEF_VISIBLE(SOURCE_DEF);
+	    return;
+	end if;
+
+        -- get id's corresponding to def's
+	SOURCE_ID := D(XD_SOURCE_NAME, SOURCE_DEF);
+	PRIOR_ID := D(XD_SOURCE_NAME, PRIOR_DEF);
+
+	-- if valid full declaration for private type
+	if KIND(PRIOR_ID) in DN_PRIVATE_TYPE_ID .. DN_L_PRIVATE_TYPE_ID
+	and then not H.IS_IN_SPEC
+	and then not H.IS_IN_BODY then
+
+	    declare
+		PRIVATE_NODE: constant TREE := D(SM_TYPE_SPEC, PRIOR_ID);
+	    begin
+		-- if not already declared
+		if D(SM_TYPE_SPEC, PRIVATE_NODE) = CONST_VOID then
+
+		    -- make this the full type declaration
+		    D(SM_TYPE_SPEC, PRIVATE_NODE, D(SM_TYPE_SPEC, SOURCE_ID));
+		    D(SM_FIRST, SOURCE_ID, PRIOR_ID);
+
+		    -- check conformance of discriminant lists
+                    -- and remove def's for duplicated names
+		    if KIND(D(SM_TYPE_SPEC, SOURCE_ID)) = DN_RECORD then
+			CONFORM_PARAMETER_LISTS
+				( D(SM_DISCRIMINANT_S, PRIOR_ID)
+				, D(SM_DISCRIMINANT_S, SOURCE_ID) );
+		    else
+			CONFORM_PARAMETER_LISTS
+				( D(SM_DISCRIMINANT_S, PRIOR_ID)
+				, CONST_VOID );
+		    end if;
+
+		    -- make source def visible and return
+		    MAKE_DEF_VISIBLE(SOURCE_DEF);
+		    return;
+		end if;
+	    end;
+	end if;
+
+	-- if possible valid full declaration for incomplete type declaration
+	if KIND(PRIOR_ID) = DN_TYPE_ID
+	and then not H.IS_IN_SPEC
+	and then not H.IS_IN_BODY then
+
+	    declare
+		INCOMPLETE_NODE: constant TREE := D(SM_TYPE_SPEC, PRIOR_ID);
+	    begin
+		-- if prior id is incomplete and not already declared
+		if KIND(INCOMPLETE_NODE) = DN_INCOMPLETE
+		and then D(XD_FULL_TYPE_SPEC,INCOMPLETE_NODE) = CONST_VOID then
+
+		    -- make this the full type declaration
+		    D(XD_FULL_TYPE_SPEC, INCOMPLETE_NODE
+			    , D(SM_TYPE_SPEC, SOURCE_ID));
+		    D(SM_FIRST, SOURCE_ID, PRIOR_ID);
+
+		    -- remove source def from environment and return
+		    REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+		    return;
+		end if;
+	    end;
+	end if;
+
+	-- type name is not unique
+	-- use check unique subprogram to give error message
+	CHECK_UNIQUE_DEF(SOURCE_DEF);
+    end CHECK_TYPE_DEF;
+
+
+    function ARE_HOMOGRAPH_HEADERS(HEADER_1, HEADER_2: TREE) return BOOLEAN is
+	-- Determines if two headers are homographs
+	-- Only called with header from xd_header attribute of def
+	--   (Hence do not need to check, e.g., discrete_range in entry)
+
+	KIND_1: constant NODE_NAME := KIND(HEADER_1);
+	KIND_2: constant NODE_NAME := KIND(HEADER_2);
+    begin
+	-- If either header is non_overloadable
+	if KIND_1 not in CLASS_SUBP_ENTRY_HEADER
+	or KIND_2 not in CLASS_SUBP_ENTRY_HEADER then
+
+	    -- they are homographs
+	    return TRUE;
+
+	-- else -- since both are overloadable
+	else
+
+	    -- split up header_2 and call HEADER_IS_HOMOGRAPH
+	    if KIND_2 = DN_FUNCTION_SPEC then
+		return HEADER_IS_HOMOGRAPH
+			( HEADER_1
+			, D(AS_PARAM_S, HEADER_2)
+			, D(AS_NAME, HEADER_2) );
+	    else
+		return HEADER_IS_HOMOGRAPH
+			( HEADER_1
+			, D(AS_PARAM_S, HEADER_2) );
+	    end if;
+	end if;
+    end ARE_HOMOGRAPH_HEADERS;
+
+    function HEADER_IS_HOMOGRAPH
+		( HEADER_1 : TREE
+		; PARAM_S_2: TREE
+		; RESULT_TYPE_2: TREE := CONST_VOID )
+	    return BOOLEAN
+    is
+	-- Determines if header_1 and (param_s_2, result_type_2) are homographs
+	-- Only called with header_1 from xd_header attribute of def
+	--   (Hence do not need to check, e.g., discrete_range in entry)
+
+	KIND_1: constant NODE_NAME := KIND(HEADER_1);
+    begin
+	-- If header_1 is non_overloadable or param_s_2 is void
+	if KIND_1 not in CLASS_SUBP_ENTRY_HEADER
+	or else PARAM_S_2 = CONST_VOID then
+
+	    -- they are homographs
+	    return TRUE;
+
+	-- If one is a function and the other is not
+	end if;
+	if (KIND_1 = DN_FUNCTION_SPEC) xor (RESULT_TYPE_2 /= CONST_VOID) then
+
+	    -- they are not homographs
+	    return FALSE;
+	end if;
+
+	-- If they are functions
+	if KIND_1 = DN_FUNCTION_SPEC then
+
+	    -- If result types are different
+	    if GET_BASE_TYPE(D(AS_NAME, HEADER_1))
+			/= GET_BASE_TYPE(RESULT_TYPE_2)
+	    then
+		-- they are not homographs
+		return FALSE;
+	    end if;
+	end if;
+
+	-- They are homographs if the parameter profile is the same
+	return IS_SAME_PARAMETER_PROFILE
+			( D(AS_PARAM_S, HEADER_1)
+			, PARAM_S_2 );
+    end HEADER_IS_HOMOGRAPH;
+
+
+    function IS_SAME_PARAMETER_PROFILE (PARAM_S_1, PARAM_S_2: TREE)
+		    return BOOLEAN
+    is
+	PARAM_LIST_1:	SEQ_TYPE := LIST(PARAM_S_1);
+	PARAM_LIST_2:	SEQ_TYPE := LIST(PARAM_S_2);
+	PARAM_1, PARAM_2: TREE;
+	ID_LIST_1, ID_LIST_2: SEQ_TYPE := MAKE;
+	ID_1, ID_2: TREE;
+    begin
+	-- loop through both parameter lists
+	loop
+
+	    -- get next element from param_list_1, if any
+	    if IS_EMPTY(ID_LIST_1) then
+		if IS_EMPTY(PARAM_LIST_1) then
+
+		    -- there is none
+		    -- compatible if no next element in param_list_2
+		    return IS_EMPTY(ID_LIST_2) and then IS_EMPTY(PARAM_LIST_2);
+		else
+		    POP(PARAM_LIST_1, PARAM_1);
+		    ID_LIST_1 := LIST(D(AS_SOURCE_NAME_S,PARAM_1));
+		end if;
+	    end if;
+	    POP(ID_LIST_1, ID_1);
+
+	    -- get next element from param_list_2, if any
+	    if IS_EMPTY(ID_LIST_2) then
+		if IS_EMPTY(PARAM_LIST_2) then
+
+		    -- there is none
+		    -- not compatible since there was an element on param_list_1
+		    return FALSE;
+		else
+		    POP(PARAM_LIST_2, PARAM_2);
+		    ID_LIST_2 := LIST(D(AS_SOURCE_NAME_S,PARAM_2));
+		end if;
+	    end if;
+	    POP(ID_LIST_2, ID_2);
+
+	    -- if they are not of the same type,
+	    if GET_BASE_TYPE(D(SM_OBJ_TYPE, ID_1))
+			/= GET_BASE_TYPE(D(SM_OBJ_TYPE, ID_2))
+	    then
+		-- then they are not compatible
+		return FALSE;
+	    end if;
+	end loop;
+    end IS_SAME_PARAMETER_PROFILE;
+
+
+    procedure CONFORM_PARAMETER_LISTS(PARAM_S_1, PARAM_S_2: TREE) is
+	PARAM_LIST_1:	SEQ_TYPE := LIST(PARAM_S_1);
+	PARAM_LIST_2:	SEQ_TYPE := LIST(PARAM_S_2);
+	PARAM_1, PARAM_2: TREE;
+	ID_LIST_1, ID_LIST_2: SEQ_TYPE := MAKE;
+	ID_1, ID_2: TREE;
+
+    begin
+	-- if parameter lists are the same
+	if PARAM_S_1 = PARAM_S_2 then
+
+	    -- must be from a generated library unit
+	    -- ... so, do not conform (i.e. do not remove defs)
+	    return;
+	end if;
+
+	-- loop through both parameter lists
+	loop
+
+	    -- check that structure of lists is compatible
+	    if (IS_EMPTY(ID_LIST_1) xor IS_EMPTY(ID_LIST_2))
+	    or (IS_EMPTY(PARAM_LIST_1) xor IS_EMPTY(PARAM_LIST_2)) then
+		exit;
+
+	    -- get next element from param_lists, if any
+	    -- return if no more elements
+	    end if;
+	    if IS_EMPTY(ID_LIST_1) then
+		if IS_EMPTY(PARAM_LIST_1) then
+		    return;
+		else
+		    POP(PARAM_LIST_1, PARAM_1);
+		    POP(PARAM_LIST_2, PARAM_2);
+		    ID_LIST_1 := LIST(D(AS_SOURCE_NAME_S,PARAM_1));
+		    ID_LIST_2 := LIST(D(AS_SOURCE_NAME_S,PARAM_2));
+
+		    if KIND(PARAM_1) /= KIND(PARAM_2) then
+			exit;
+		    end if;
+
+		    if not IS_COMPATIBLE_EXPRESSION
+				( D(AS_NAME,PARAM_1)
+				, D(AS_NAME,PARAM_2) )
+		    or else not IS_COMPATIBLE_EXPRESSION
+				( D(AS_EXP,PARAM_1)
+				, D(AS_EXP,PARAM_2) )
+		    then
+			exit;
+		    end if;
+		end if;
+	    end if;
+
+	    POP(ID_LIST_1, ID_1);
+
+	    if D(LX_SYMREP, ID_1) /= D(LX_SYMREP, HEAD(ID_LIST_2)) then
+		exit;
+	    end if;
+
+	    POP(ID_LIST_2, ID_2);
+
+            -- Id's are compatible, replace defs
+	    D(SM_FIRST, ID_2, D(SM_FIRST, ID_1));
+	    D(XD_REGION, ID_2, D(XD_REGION, ID_1));
+	    D(SM_INIT_EXP, ID_2, D(SM_INIT_EXP, ID_1));
+	    D(SM_OBJ_TYPE, ID_2, D(SM_OBJ_TYPE, ID_1));
+	    REMOVE_DEF_FROM_ENVIRONMENT(GET_DEF_FOR_ID(ID_2));
+
+	end loop;
+
+	-- incompatible, since we exited from loop
+        ERROR(D(LX_SRCPOS,PARAM_S_2), "Param lists not compatible");
+
+	-- discard defs from second list anyway
+	loop
+	    while not IS_EMPTY(ID_LIST_2) loop
+		POP(ID_LIST_2, ID_2);
+		REMOVE_DEF_FROM_ENVIRONMENT(GET_DEF_FOR_ID(ID_2));
+	    end loop;
+	    exit
+		when IS_EMPTY(PARAM_LIST_2);
+	    POP(PARAM_LIST_2, PARAM_2);
+	    ID_LIST_2 := LIST(D(AS_SOURCE_NAME_S,PARAM_2));
+	end loop;
+
+    end CONFORM_PARAMETER_LISTS;
+
+
+    function IS_COMPATIBLE_EXPRESSION (EXP_1, EXP_2: TREE) return BOOLEAN is
+	-- arguments are expressions or ranges or void
+	-- return true if compatible (within param or dscrmt list)
+    begin
+	-- $$$$$$$$ stub $$$$$$$
+	return TRUE;
+    end IS_COMPATIBLE_EXPRESSION;
+
+
+    procedure MAKE_DEF_VISIBLE(DEF: TREE; HEADER: TREE := CONST_VOID) is
+    begin
+	D(XD_HEADER, DEF, HEADER);
+    end MAKE_DEF_VISIBLE;
+
+
+    procedure MAKE_DEF_IN_ERROR(DEF: TREE) is
+    begin
+	D(XD_HEADER, DEF, CONST_FALSE);
+    end MAKE_DEF_IN_ERROR;
+
+
+    procedure REMOVE_DEF_FROM_ENVIRONMENT(DEF: TREE) is
+    begin
+	D(XD_HEADER, DEF, CONST_VOID);
+	D(XD_REGION_DEF, DEF, CONST_VOID);
+	DI(XD_LEX_LEVEL, DEF, 0);
+	DB(XD_IS_USED, DEF, FALSE);
+    end REMOVE_DEF_FROM_ENVIRONMENT;
+
+    function GET_DEF_EXP_TYPE(DEF: TREE) return TREE is
+	HEADER: constant TREE := D(XD_HEADER,DEF);
+	SOURCE_NAME: TREE := D(XD_SOURCE_NAME, DEF);
+    begin
+	if KIND(HEADER) = DN_FUNCTION_SPEC then
+	    return GET_BASE_TYPE(D(AS_NAME,HEADER));
+	elsif KIND(SOURCE_NAME) in CLASS_OBJECT_NAME then
+	    return GET_BASE_TYPE(D(SM_OBJ_TYPE, D(XD_SOURCE_NAME, DEF)));
+	elsif KIND(SOURCE_NAME) in CLASS_TYPE_SPEC then
+	    if KIND(GET_BASE_TYPE(SOURCE_NAME)) /= DN_TASK_SPEC then
+		QUIT("Non task type name in call to get_def_exp_type");
+	    end if;
+	    return GET_BASE_TYPE(SOURCE_NAME);
+	else
+	    return CONST_VOID;
+	end if;
+    end GET_DEF_EXP_TYPE;
+
+    function GET_BASE_TYPE(TYPE_SPEC_OR_EXP_OR_ID: TREE) return TREE is
+	TYPE_SPEC: TREE := TYPE_SPEC_OR_EXP_OR_ID;
+	TYPE_ID:   TREE;
+    begin
+
+	-- get a type spec for the expression or id
+	case KIND(TYPE_SPEC_OR_EXP_OR_ID) is
+	when DN_VOID =>
+	    null;
+	when DN_USED_NAME_ID =>
+	    TYPE_SPEC := D(SM_DEFN, TYPE_SPEC);
+	    if TYPE_SPEC /= CONST_VOID then
+		TYPE_SPEC := D(SM_TYPE_SPEC, TYPE_SPEC);
+	    end if;
+	when CLASS_OBJECT_NAME =>
+	    TYPE_SPEC := D(SM_OBJ_TYPE, TYPE_SPEC);
+	when DN_FUNCTION_ID =>
+	    -- (for slice whose prefix is function with all default args)
+	    TYPE_SPEC := GET_BASE_TYPE(D(AS_NAME, D(SM_SPEC,TYPE_SPEC)));
+	when DN_PROCEDURE_ID =>
+	    -- (for identifier as expression before overload resolution)
+	    TYPE_SPEC := CONST_VOID;
+	when DN_GENERIC_ID =>
+	    -- (for either of the above cases)
+	    if KIND(D(XD_HEADER,GET_DEF_FOR_ID(TYPE_SPEC))) = DN_FUNCTION_SPEC
+	    then
+	        TYPE_SPEC := GET_BASE_TYPE(D(AS_NAME, D(SM_SPEC,TYPE_SPEC)));
+	    else
+	        TYPE_SPEC := CONST_VOID;
+	    end if;
+	when CLASS_TYPE_NAME | CLASS_RANGE =>
+	    TYPE_SPEC := D(SM_TYPE_SPEC, TYPE_SPEC);
+	when CLASS_USED_OBJECT | CLASS_EXP_EXP
+		| DN_ATTRIBUTE | DN_FUNCTION_CALL | DN_INDEXED
+		| DN_SLICE | DN_ALL =>
+	    TYPE_SPEC := D(SM_EXP_TYPE, TYPE_SPEC);
+	when DN_SELECTED =>
+	    TYPE_SPEC := GET_BASE_TYPE(D(AS_DESIGNATOR, TYPE_SPEC));
+	when CLASS_TYPE_SPEC =>
+	    null;
+	when DN_DISCRETE_SUBTYPE =>
+	    TYPE_SPEC := GET_BASE_TYPE
+			( D(AS_NAME, D(AS_SUBTYPE_INDICATION, TYPE_SPEC)) );
+	when DN_SUBTYPE_INDICATION =>
+	    TYPE_SPEC := D(SM_TYPE_SPEC, D(AS_NAME, TYPE_SPEC));
+	when CLASS_UNSPECIFIED_TYPE =>
+	    null;
+	when others =>
+            QUIT("Bad parameter for GET_BASE_TYPE");
+	end case;
+
+	-- get unconstrained for constrained type 
+	-- (in case constrained private with full type visible)
+	if KIND(TYPE_SPEC) in CLASS_CONSTRAINED then
+	    TYPE_SPEC := D(SM_BASE_TYPE, TYPE_SPEC);
+	end if;
+
+	-- get full type spec for private or incomplete
+	if KIND(TYPE_SPEC) in CLASS_PRIVATE_SPEC then
+	    if D(SM_TYPE_SPEC, TYPE_SPEC) /= CONST_VOID then
+		TYPE_SPEC := D(SM_TYPE_SPEC, TYPE_SPEC);
+	    end if;
+	elsif KIND(TYPE_SPEC) = DN_INCOMPLETE then
+	    if D(XD_FULL_TYPE_SPEC, TYPE_SPEC) /= CONST_VOID then
+		TYPE_SPEC := D(XD_FULL_TYPE_SPEC, TYPE_SPEC);
+	    end if;
+	end if;
+
+	-- loop to get base type
+	-- $$$$ ok? non-task --> private ?
+	while KIND(TYPE_SPEC) in CLASS_NON_TASK 
+	and then D(SM_BASE_TYPE, TYPE_SPEC) /= TYPE_SPEC loop
+		TYPE_SPEC := D(SM_BASE_TYPE, TYPE_SPEC);
+	end loop;
+
+	return TYPE_SPEC;
+    end GET_BASE_TYPE;
+
+
+    function GET_BASE_PACKAGE(PACKAGE_ID: TREE) return TREE is
+	UNIT_DESC: TREE := D(SM_UNIT_DESC, PACKAGE_ID);
+	BASE_ID: TREE;
+    begin
+	if KIND(UNIT_DESC) = DN_RENAMES_UNIT then
+	    BASE_ID := GET_NAME_DEFN(D(AS_NAME, UNIT_DESC));
+	    if BASE_ID /= CONST_VOID then
+		return GET_BASE_PACKAGE(BASE_ID);
+	    end if;
+	end if;
+	return PACKAGE_ID;
+    end GET_BASE_PACKAGE;
+
+end DEFUTIL;

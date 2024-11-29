@@ -1,0 +1,481 @@
+with TEXT2_IO, DIANAMAN, DIANA, DIANATTR;
+use  TEXT2_IO, DIANAMAN, DIANA, DIANATTR;
+with UNCHECKED_CONVERSION;
+package body UNIVOPS is
+  subtype UDIGIT is SHORT;
+
+  NUM_VAL: constant INTEGER := NODE_NAME'POS(DN_NUM_VAL);
+  ZERO_BYTE: constant BYTE := BYTE(0);
+
+  type UDIGIT_PAIR_TYPE is 
+    record
+      UDIGIT_1: UDIGIT;
+      UDIGIT_2: UDIGIT;
+    end record;
+
+  procedure DIGIT_MUL(A,B: in UDIGIT; H, L: out UDIGIT);
+  function DIGIT_DIV(H,L,A: UDIGIT) return UDIGIT;
+
+  function U_INT(V:VECTOR) return TREE is
+    -- make universal integer from vector
+    R: TREE;
+    WLEN: INTEGER;
+    TEMP: TREE;
+
+    UDIGIT_PAIR: UDIGIT_PAIR_TYPE;
+    function CAST_TREE is new UNCHECKED_CONVERSION(UDIGIT_PAIR_TYPE, TREE);
+
+  begin
+    if V.L = 1 then
+      return MAKE_TREE(INTEGER(V.D(1)) * V.S, NUM_VAL, 0);
+    end if;
+    if V.L = 2 then
+      if V.S < 0 and then V.D(1) = 2768 and then V.D(2) = 3 then
+	return MAKE_TREE((-32767)-1, NUM_VAL, 0);
+      end if;
+      if V.D(2) < 3
+      or else (V.D(2) = 3 and then V.D(1) < 2768) then
+	return MAKE_TREE(INTEGER(V.D(2)*10000+V.D(1))*V.S, NUM_VAL, 0);
+      end if;
+    -- must make long integer
+    end if;
+    WLEN := (V.L+1) / 2;
+    R := MAKE(NUM_VAL, WLEN);
+    for I in 1..WLEN loop
+      UDIGIT_PAIR.UDIGIT_1 := V.D(I*2-1);
+      UDIGIT_PAIR.UDIGIT_2 := V.D(I*2);
+      DABS(I,R,CAST_TREE(UDIGIT_PAIR));
+    end loop;
+    if WLEN * 2 > V.L then
+      -- force zero in right side of last word
+      DABS(WLEN,R,MAKE_TREE(INTEGER(UDIGIT_PAIR.UDIGIT_1),0,0));
+    end if;
+    -- Set sign
+    if V.S < 0 then
+      TEMP := DABS(1,R);
+      TEMP.TPG := TEMP.TPG + 10000;
+      DABS(1,R,TEMP);
+    end if;
+    return R;
+  end U_INT;
+
+  function U_REAL(N:VECTOR; D:VECTOR) return TREE is
+    -- make universal real from two vectors (already lowest terms)
+    R: TREE := MAKE(DN_REAL_VAL);
+  begin
+    DIANA.D(XD_NUMER, R, U_INT(N));
+    DIANA.D(XD_DENOM, R, U_INT(D));
+    return R;
+  end U_REAL;
+
+  function U_REAL(N:TREE; D:TREE) return TREE is
+    N_SPREAD, D_SPREAD: VECTOR;
+    THE_REAL: TREE := MAKE(DN_REAL_VAL);
+  begin
+    SPREAD(N, N_SPREAD);
+    SPREAD(D, D_SPREAD);
+
+    if D_SPREAD.L = 2
+    and then D_SPREAD.D(1) = 0
+    and then D_SPREAD.D(2) = 0 then
+	return CONST_VOID; -- denominator is zero
+    end if;
+
+    N_SPREAD.S := N_SPREAD.S * D_SPREAD.S;
+    D_SPREAD.S := +1;
+    V_LOWEST_TERMS(N_SPREAD, D_SPREAD);
+    DIANA.D(XD_NUMER, THE_REAL, U_INT(N_SPREAD));
+    DIANA.D(XD_DENOM, THE_REAL, U_INT(D_SPREAD));
+    return THE_REAL;
+  end U_REAL;
+
+  procedure SPREAD(I: TREE; U:in out VECTOR) is
+    TT: TREE;
+
+    UDIGIT_PAIR: UDIGIT_PAIR_TYPE;
+    function CAST_UDIGIT_PAIR is new
+			 UNCHECKED_CONVERSION(TREE, UDIGIT_PAIR_TYPE);
+
+  begin
+    if KIND(I) /= DN_NUM_VAL then
+      QUIT("Cannot spread " & NODE_IMAGE(KIND(I)));
+    end if;
+    if I.TLN = ZERO_BYTE then
+      SPREAD(INTEGER(I.TPG), U);
+    else
+      TT := DABS(0,I);
+      U.L := 2 * INTEGER(TT.TLN);
+      for J in 1 .. INTEGER(TT.TLN) loop
+        UDIGIT_PAIR := CAST_UDIGIT_PAIR(DABS(J, I));
+ 	U.D(J*2-1) := UDIGIT_PAIR.UDIGIT_1;
+ 	U.D(J*2) := UDIGIT_PAIR.UDIGIT_2;
+      end loop;
+      if U.D(1) >= 10000 then
+	U.D(1) := U.D(1) - 10000;
+	U.S := -1;
+      else
+	U.S := +1;
+      end if;
+      NORMALIZE(U);
+    end if;
+  end SPREAD;
+
+  procedure SPREAD(I: INTEGER; U:in out VECTOR) is
+      -- make vector from integer
+  begin
+    U.L := 2;
+    if I < 0 then
+      if I < -32767 then
+	-- special case for max negative integer
+	U.D(2) := 3;
+	U.D(1) := 2768;
+      else
+	SPREAD(-I, U);
+      end if;
+      U.S := -1;
+    else
+      U.S := +1;
+      U.L := 2;
+      U.D(2) := SHORT(I/10000);
+      U.D(1) := SHORT(I mod 10000);
+      NORMALIZE(U);
+    end if;
+  end SPREAD;
+
+  procedure NORMALIZE(V: in out VECTOR) is
+      -- remove excess leading zeros
+  begin
+    while V.L > 1 and V.D(V.L) = 0 loop
+      V.L := V.L - 1;
+    end loop;
+    if V.L > 250 then
+      PUT_LINE("Univ integer > 1000 digits - compiler limitation");
+      raise ASSERTION_ERROR;
+    end if;
+  end NORMALIZE;
+
+  procedure V_COPY(A: VECTOR; R: out VECTOR) is
+  begin
+    R.S := A.S;
+    R.L := A.L;
+    R.D(1 .. A.L) := A.D(1 .. A.L);
+  end V_COPY;
+
+  procedure V_ADD(A: VECTOR; R: in out VECTOR) is
+    ALEN : INTEGER := A.L;
+    TEMP : UDIGIT;
+    CARRY: UDIGIT := 0;
+  begin
+    if R.L < A.L then
+      for I in R.L + 1 .. A.L loop
+	R.D(I) := A.D(I);
+      end loop;
+      ALEN := R.L;
+      R.L := A.L;
+    end if;
+    R.L := R.L + 1;
+    R.D(R.L) := 0;
+    for I in 1 .. ALEN loop
+      TEMP := A.D(I) + R.D(I) + CARRY;
+      if TEMP >= 10000 then
+	CARRY := 1;
+	TEMP := TEMP - 10000;
+      else
+	CARRY := 0;
+      end if;
+      R.D(I) := TEMP;
+    end loop;
+    for I in ALEN + 1 .. R.L loop
+      exit
+	when CARRY = 0;
+      TEMP := R.D(I) + CARRY;
+      if TEMP >= 10000 then
+	TEMP := TEMP - 10000;
+	CARRY := 1;
+      else
+	CARRY := 0;
+      end if;
+      R.D(I) := TEMP;
+    end loop;
+    NORMALIZE(R);
+  end V_ADD;
+
+  procedure V_SUB(A: VECTOR; R: in out VECTOR) is
+    TEMP : UDIGIT;
+    BORROW: UDIGIT := 0;
+  begin
+    -- assume that A <= R !!!
+    for I in 1 .. A.L loop
+      TEMP := R.D(I) - A.D(I) - BORROW;
+      if TEMP < 0 then
+	BORROW := 1;
+	TEMP := TEMP + 10000;
+      else
+	BORROW := 0;
+      end if;
+      R.D(I) := TEMP;
+    end loop;
+    for I in A.L + 1 .. R.L loop
+      exit
+	when BORROW = 0;
+      TEMP := R.D(I) - BORROW;
+      if TEMP < 0 then
+	TEMP := TEMP + 10000;
+	BORROW := 1;
+      else
+	BORROW := 0;
+      end if;
+      R.D(I) := TEMP;
+    end loop;
+    NORMALIZE(R);
+  end V_SUB;
+
+  procedure V_MUL(A,B: VECTOR; R: in out VECTOR) is
+    H, L, TEMP, CARRY: UDIGIT;
+    K: INTEGER;
+  begin
+    R.S := +1;
+    R.L := A.L + B.L;
+    if R.L > 251 then
+      PUT_LINE ("Univ product too large");
+      raise ASSERTION_ERROR;
+    end if;
+    for I in 1 .. R.L loop
+      R.D(I) := 0;
+    end loop;
+    for I in 1 .. A.L loop
+      for J in 1 .. B.L loop
+	K := I + J - 1;
+	DIGIT_MUL(A.D(I), B.D(J), H, L);
+	TEMP := R.D(K) + L;
+	if TEMP >= 10000 then
+	  CARRY := 1;
+	  TEMP := TEMP - 10000;
+	else
+	  CARRY := 0;
+	end if;
+	R.D(K) := TEMP;
+	K := K+1;
+	TEMP := R.D(K) + H + CARRY;
+	if TEMP >= 10000 then
+	  CARRY := 1;
+	  TEMP := TEMP - 10000;
+	else
+	  CARRY := 0;
+	end if;
+	R.D(K) := TEMP;
+	while CARRY > 0 loop
+	  K := K+1;
+	  TEMP := R.D(K) + CARRY;
+	  if TEMP >= 10000 then
+	    CARRY := 1;
+	    TEMP := TEMP - 10000;
+	  else
+	    CARRY := 0;
+	  end if;
+	  R.D(K) := TEMP;
+	end loop;
+      end loop;
+    end loop;
+    NORMALIZE(R);
+  end V_MUL;
+
+  procedure V_SCALE(A: INTEGER; R: in out VECTOR) is
+    H, L: UDIGIT;
+    CARRY: UDIGIT := 0;
+  begin
+    for I in 1..R.L loop
+      DIGIT_MUL(UDIGIT(A), R.D(I), H, L);
+      L := L + CARRY;
+      R.D(I) := L mod 10000;
+      CARRY := H + L/10000;
+    end loop;
+    if CARRY > 0 then
+      R.L := R.L + 1;
+      R.D(R.L) := CARRY;
+    end if;
+  end V_SCALE;
+
+  procedure V_DIV(A: VECTOR; R, Q: in out VECTOR) is
+    -- R/A --> Q,R
+    -- A poor long-division algorithm (extra iterations)
+    -- Good enough for government work, for now
+    A_TRIAL : constant UDIGIT := A.D(A.L) + 1;
+    QDIG, CARRY, TEMP: UDIGIT;
+    RSAVE: VECTOR;
+    PPROD: VECTOR;
+  begin
+    if A.D(1) = 0 and then A.L = 1 then
+	put_line("V_Div: Divide by zero");
+	raise PROGRAM_ERROR;
+    end if;
+--@ PUT("DIV...");PUT(A.L);PUT(A.D(A.L));
+--@ PUT(R.L);PUT(R.D(R.L));PUT(A_TRIAL);NEW_LINE;
+    V_COPY(R,RSAVE);
+    Q.S := +1;
+    Q.L := R.L - A.L + 1;
+    if Q.L <= 0 then
+      Q.L := 1;
+    end if;
+    for I in 1 .. Q.L loop
+      Q.D(I) := 0;
+    end loop;
+    while not V_LESS(R,A) loop
+      if R.L = A.L and then R.D(R.L) = A.D(A.L) then
+	QDIG := 1; -- since know R >= A
+	R.L := R.L + 1;
+	R.D(R.L) := 0;
+      else
+	if R.D(R.L) >= A_TRIAL then
+	  R.L := R.L + 1;
+	  R.D(R.L) := 0;
+	end if;
+	-- know that Rhigh < A_TRIAL and R.L >= 2
+	-- if it is equal, qdigit will be about 9999
+	QDIG := DIGIT_DIV(R.D(R.L), R.D(R.L-1), A_TRIAL);
+      end if;
+      -- We do full-length multiply
+      -- Eventually, just use digit; then REM can avoid calc of quotient
+--@   PUT(R.L);PUT(R.D(R.L));PUT(R.D(R.L-1));PUT(QDIG);NEW_LINE;
+      CARRY := QDIG;
+      for I in R.L - A.L .. Q.L loop
+	TEMP := Q.D(I) + CARRY;
+--@     PUT(I,1);PUT("'th digit = ");PUT(TEMP,1);NEW_LINE;
+	if TEMP < 10000 then
+	  Q.D(I) := TEMP;
+	  exit;
+	end if;
+	Q.D(I) := TEMP - 10000;
+	CARRY := 1;
+      end loop;
+      V_COPY(RSAVE,R);
+      V_MUL(Q,A,PPROD);
+      V_SUB(PPROD,R);
+    end loop;
+    NORMALIZE(Q);
+--@ PUT_LINE("End DIV");
+  end V_DIV;
+
+  procedure V_REM(A: VECTOR; R:in out VECTOR) is
+    TMPQ: VECTOR;
+  begin
+    V_DIV(A,R,TMPQ);
+  end V_REM;
+
+  procedure V_GCD(A,B: VECTOR; R:in out VECTOR) is
+    S: VECTOR;
+  begin
+    V_COPY(A,R);
+    V_COPY(B,S);
+    loop
+      V_REM(R,S);
+      if S.L = 1 and then S.D(1) = 0 then
+	return;
+      end if;
+      V_REM(S,R);
+      if R.L = 1 and then R.D(1) = 0 then
+	V_COPY(S,R);
+	return;
+      end if;
+    end loop;
+  end V_GCD;
+
+  procedure V_LOWEST_TERMS(A,B: in out VECTOR) is
+    GCD: VECTOR;
+    TREM: VECTOR;
+    SIGN: INTEGER;
+  begin
+    if B.L = 1 and then B.D(1) = 1 then
+      return;
+    end if;
+    if A.L = 1 and then A.D(1) = 0 then
+      B.L := 1;
+      B.D(1) := 1;
+      return;
+    end if;
+    SIGN := A.S * B.S;
+    V_GCD(A,B,GCD);
+    if GCD.L > 1 or else GCD.D(1) > 1 then
+      V_COPY(A,TREM);
+      V_DIV(GCD,TREM,A);
+      V_COPY(B,TREM);
+      V_DIV(GCD,TREM,B);
+    end if;
+    A.S := SIGN;
+    B.S := +1;
+  end V_LOWEST_TERMS;
+
+  function V_EQUAL(A,B: VECTOR) return BOOLEAN is
+  begin
+    -- note that only magnitude is considered
+    if A.L /= B.L then
+      return FALSE;
+    end if;
+    for I in 1 .. A.L loop
+      if A.D(I) /= B.D(I) then
+	return FALSE;
+      end if;
+    end loop;
+    return TRUE;
+  end V_EQUAL;
+
+  function V_LESS(A,B: VECTOR) return BOOLEAN is
+  begin
+    -- note that only magnitude is considered
+    if A.L /= B.L then
+      return A.L < B.L;
+    end if;
+    for I in reverse 1 .. A.L loop
+      if A.D(I) /= B.D(I) then
+	return A.D(I) < B.D(I);
+      end if;
+    end loop;
+    return FALSE;
+  end V_LESS;
+
+  ----------------------------------------------------------------------------
+
+  procedure DIGIT_MUL(A,B: in UDIGIT; H, L: out UDIGIT) is
+    A1, A2, B1, B2, LL, XX: UDIGIT;
+  begin
+    A1 := A/100;
+    A2 := A mod 100;
+    B1 := B/100;
+    B2 := B mod 100;
+    XX := A1 * B2 + A2 * B1;
+    LL := A2 * B2 + (XX mod 100) * 100;
+    L := LL mod 10000;
+    H := A1 * B1 + LL/10000 + XX/100;
+  end DIGIT_MUL;
+
+  function DIGIT_DIV (H, L, A: UDIGIT) return UDIGIT is
+    QUO: UDIGIT;
+    PH, PL: UDIGIT; -- trial product
+  begin
+    -- must have H < A (otherwise overflow)
+
+    if H = 0 then
+	-- easy case; just integer division
+	return L / A;
+    elsif A < 100 then
+        -- force A >= 100
+        return DIGIT_DIV(H*100+L/100, (L mod 100)*100, A*100);
+    else
+ 	-- always reduce to a simpler case
+	if H >= 100 then
+	    QUO := (H / ((A+99) / 100)) * 100;
+        else
+	    QUO := ((H*100) + (L/100)) / ((A+99) / 100);
+	end if;
+	-- Assert: QUO > 0
+        DIGIT_MUL(A, QUO, PH, PL);
+	-- Assert: H*10000 + L = QUO*A + PH*10000 + PL
+	if L >= PL then
+	    return QUO + DIGIT_DIV(H - PH, L - PL, A);
+	else
+	    return QUO + DIGIT_DIV(H - 1 - PH, L + 10000 - PL, A);
+	end if;
+    end if;
+  end DIGIT_DIV;
+
+end UNIVOPS;

@@ -1,0 +1,8 @@
+with USERPK; use USERPK;
+
+package HOMUNIT is
+
+    function WALK_HOMOGRAPH_UNIT (UNIT_NAME: TREE; HEADER: TREE)
+	    return TREE;
+
+end HOMUNIT;

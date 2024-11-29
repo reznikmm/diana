@@ -1,0 +1,309 @@
+with PAGEIO; use PAGEIO;
+--@ with TEXT2_IO; use TEXT2_IO;
+with TEXT2_IO; use TEXT2_IO; -- bug trap
+package body PAGEMAN is
+  subtype POSITIVE_COUNT is PAGEIO.POSITIVE_COUNT;
+  SKIP_COUNT: constant POSITIVE_COUNT := 1; -- skip 1 rec for realia compatible
+
+  WORK_FILE:	PAGEIO.FILE_TYPE;
+  WORK_NAME:    STRING(1..7) := "$$$.TMP";
+  RPG_TO_CHECK: RPG_NBR;
+  VIRGIN_TREE:	TREE;  -- initialized by CLEAR_TABLES
+
+  procedure CLEAR_TABLES;
+  function  ASSIGN_RPG (VP: VPG_NBR) return RPG_NBR;
+  procedure INACTIVATE_RPG (RP: RPG_NBR);
+  procedure FREE_RPG (RP: RPG_NBR);
+  procedure WRITE_RPG (RP: RPG_NBR);
+  procedure PRINT_TABLES;
+
+  ---------------------------------------------------------------------
+
+  procedure CREATE_PAGE_MANAGER is
+    RP: RPG_NBR;
+  begin
+    CLEAR_TABLES;
+    CREATE(WORK_FILE, INOUT_FILE, WORK_NAME);
+    -- Root and Hash constructed in IDLMAN.PKG
+    -- PRINT_TABLES;
+    -- put_line("leaving create_page_manager");
+  end CREATE_PAGE_MANAGER;
+
+  procedure OPEN_PAGE_MANAGER is
+    RP: RPG_NBR;
+  begin
+    -- put_line("pageman: in open_page_manager");
+    CLEAR_TABLES;
+    -- put_line("back from clear_tables");
+    OPEN(WORK_FILE, INOUT_FILE, WORK_NAME);
+    -- put_line("file opened");
+    if VPG(1).RP /= 0 then
+      -- suspected bug
+      PUT_LINE("On open, VPG(1).RP=");PUT(VPG(1).RP);NEW_LINE;
+    end if;
+    -- put_line("reading page 1");
+    RP := READ_PAGE(1); -- read root record
+    -- put("back from read_page - RP = ");put(rp,1);new_line;
+    -- for i in 0..31 loop
+    --   for j in 1..4 loop
+    --     put("  ");put(integer(RPG(RP).DATA.all(4*i+j).tpg),1);
+    --     put(".");put(integer(RPG(RP).DATA.all(4*i+j).tty),1);
+    --     put(".");put(integer(RPG(RP).DATA.all(4*i+j).tln),1);
+    --   end loop;
+    --   new_line;
+    -- end loop;
+    if RP /= 1 then
+      -- suspected bug
+      PUT_LINE("On open, RP=");PUT(RP);NEW_LINE;
+    end if;
+    -- put("rpg(rp).data(2).tpg = ");put(integer(rpg(rp).data(2).tpg),1);new_line;
+    HIGH_VPG := integer(RPG(RP).DATA.all(2).TPG);
+  end OPEN_PAGE_MANAGER;
+
+  function READ_PAGE(VP: VPG_NBR) return RPG_NBR is
+    RP: RPG_DES;
+  begin
+    -- put("pageman: ");
+    -- put("in read_page - ");
+    -- put(vp,1);
+    -- new_line;
+    RP := VPG(VP).RP;
+    -- put("RP = ");put(RP,1);new_line;
+    if RP < 0 then -- inactive to active
+      RP := - RP;
+    elsif RP = 0 then
+      -- put_line("calling assign_rpg");
+      RP := ASSIGN_RPG(VP);
+      -- PUT("READING");PUT(VP);PUT(" INTO");PUT(RP);NEW_LINE;
+      READ(WORK_FILE, RPG(RP).DATA.all, POSITIVE_COUNT(VP) + SKIP_COUNT);
+    end if;
+    VPG(VP).RP := RP;
+    return RP;
+  end READ_PAGE;
+
+  procedure ALLOC_PAGE(AR: AREA_NBR; SZ: NATURAL) is
+    RP: RPG_NBR;
+    OLD_RP: RPG_DES;
+    OLD_VP: VPG_DES;
+  begin
+    -- PUT("ALLOC_PAGE(");PUT(AR);PUT(",");PUT(SZ);PUT_LINE(")");
+    if AREA(AR).NLN + SZ < SECTOR_SIZE then
+      -- PUT_LINE("HAVE_SPACE");
+      null;
+    elsif AREA(AR).SAVE_NLN + SZ < SECTOR_SIZE then
+      -- PUT_LINE("INACT");
+      RP := READ_PAGE(AREA(AR).NVP);
+      RPG(RP).AREA := AR;
+      AREA(AR).NLN := AREA(AR).SAVE_NLN;
+      AREA(AR).SAVE_NLN := SECTOR_SIZE;
+    else -- need a new page
+      if HIGH_VPG >= MAX_VPG then
+        QUIT("too many vpg");
+      end if;
+      -- Clear any active page for area
+      OLD_VP := AREA(AR).NVP;
+      if OLD_VP > 0 then
+        -- put_line("clearing active page for area");
+	OLD_RP := VPG(OLD_VP).RP;
+	if OLD_RP > 0 then
+	  RPG(OLD_RP).CHANGED := TRUE;
+	  RPG(OLD_RP).AREA := 0;
+	end if;
+      end if;
+      -- Assign new page
+      HIGH_VPG := HIGH_VPG + 1;
+      RP := ASSIGN_RPG(HIGH_VPG);
+      -- PUT("ALLOC  ");PUT(HIGH_VPG);PUT(" TO  ");PUT(RP);NEW_LINE;
+      -- Make prior page inactive -- for sequential writing
+      if OLD_VP > 0 and then VPG(OLD_VP).RP > 0 then
+        -- put_line("inact prior page");
+	VPG(OLD_VP).RP := - VPG(OLD_VP).RP;
+      end if;
+      -- clear page (for debug)
+      -- put("before clearing ... ");put(rp);new_line;
+      -- print_tables;
+      for I in LINE_NBR loop
+	RPG(RP).DATA.all(I) := VIRGIN_TREE;
+      end loop;
+      -- put_line("after clearing ...");
+      -- print_tables;
+      RPG(RP).AREA := AR;
+      AREA(AR).NVP := HIGH_VPG;
+      AREA(AR).NLN := 0;
+      AREA(AR).SAVE_NLN := SECTOR_SIZE;
+    end if;
+  end ALLOC_PAGE;
+
+  procedure CLOSE_PAGE_MANAGER is
+    RP: RPG_NBR;
+  begin
+    RP := READ_PAGE(1); -- get root record
+    if integer(RPG(RP).DATA.all(2).TPG) /= HIGH_VPG then
+      RPG(RP).DATA.all(2).TPG := short(HIGH_VPG);
+      RPG(RP).CHANGED := TRUE;
+    end if;
+    for I in RPG_NBR loop
+      if RPG(I).VP /= 0 then
+	INACTIVATE_RPG (I);
+	if RPG(I).CHANGED then
+	  WRITE_RPG (I);
+	end if;
+      end if;
+    end loop;
+    CLOSE(WORK_FILE);
+  end CLOSE_PAGE_MANAGER;
+
+  ---------------------------------------------------------------------
+
+  procedure CLEAR_TABLES is
+  begin
+    VIRGIN_TREE.TPG := -1;
+    VIRGIN_TREE.TTY := (255);
+    VIRGIN_TREE.TLN := (255);
+
+    HIGH_VPG := 0;
+    RPG_TO_CHECK := RPG_NBR'LAST;
+    for I in VPG_NBR loop
+      VPG(I).RP := 0;
+    end loop;
+
+    for I in RPG_NBR loop
+      RPG(I).VP := 0;
+      RPG(I).AREA := 0;
+      RPG(I).CHANGED := FALSE;
+      RPG(I).DATA := new SECTOR;
+    end loop;
+
+    for I in AREA_NBR loop
+      AREA(I).NVP := 0;
+      AREA(I).NLN := SECTOR_SIZE;
+      AREA(I).SAVE_NLN := SECTOR_SIZE;
+    end loop;
+  end CLEAR_TABLES;
+
+  function ASSIGN_RPG (VP: VPG_NBR) return RPG_NBR is
+    DUMMY: RPG_NBR;
+  begin
+    -- put_line("PAGEMAN: ASSIGN_RPG");
+    -- print_tables;
+    loop
+      if RPG_TO_CHECK < MAX_RPG then
+	RPG_TO_CHECK := RPG_TO_CHECK + 1;
+      else
+	RPG_TO_CHECK := 1;
+      end if;
+      -- put("PAGEMAN: in ASSIGN_PAGE - RPG_TO_CHECK = ");put(RPG_TO_CHECK,1);
+      -- new_line;
+      exit when
+	RPG(RPG_TO_CHECK).VP = 0 or else VPG(RPG(RPG_TO_CHECK).VP).RP <= 0;
+      -- It is an active page; make inactive and continue
+      -- put_line("calling inactivate_rpg");
+      INACTIVATE_RPG(RPG_TO_CHECK);
+    end loop;
+
+    -- put ("calling free_rpg - ") ; put(RPG_TO_CHECK); new_line;
+    FREE_RPG(RPG_TO_CHECK);
+    -- put_line("back from free_rpg");
+    VPG(VP).RP := RPG_TO_CHECK;
+    RPG(RPG_TO_CHECK).VP := VP;
+    -- PUT("ASSIGN ");PUT(RPG_TO_CHECK);PUT(" TO ");PUT(VP);NEW_LINE;
+    return RPG_TO_CHECK;
+  end ASSIGN_RPG;
+
+  procedure INACTIVATE_RPG (RP: RPG_NBR) is
+    VP: VPG_DES;
+    AR: AREA_DES;
+    RPG_RP: RPG_DATA renames RPG(RP);
+  begin
+    VP := RPG_RP.VP;
+    if VP /= 0 then
+      -- PUT("INACTIV");PUT(VP);PUT(" IN  ");PUT(RP);NEW_LINE;
+      if VPG(VP).RP > 0 then
+	if VPG(VP).RP /= RP then
+          PUT_LINE("Conflict -- VPG(VP).RP /= RP");
+          PUT("RP = ");PUT(RP,0);PUT(" VP = ");PUT(VP,0);
+          PUT(" VPG(VP).RP) = ");PUT(VPG(VP).RP);NEW_LINE;
+	  PRINT_TABLES;
+	  raise ASSERTION_ERROR;
+	end if;
+	AR := RPG(RP).AREA;
+        -- put("PAGEMAN: INACTIVATE_RPG: AR = ");PUT(AR,1);NEW_LINE;
+	if AR > 0 then
+	  RPG_RP.AREA := 0;
+          -- put_line("about to write SAVE_NLN");
+	  AREA(AR).SAVE_NLN := AREA(AR).NLN;
+          -- put_LINE("SAVE_NLN written");
+	  AREA(AR).NLN := SECTOR_SIZE;
+	  RPG_RP.CHANGED := TRUE;
+	end if;
+	VPG(VP).RP := - RP;
+      else
+	if VPG(VP).RP /= - RP then
+          put_line("PAGEMAN: INACTIVATE_RPG: bad data");
+	  raise ASSERTION_ERROR;
+	end if;
+      end if;
+    end if;
+  end INACTIVATE_RPG;
+
+  procedure FREE_RPG (RP: RPG_NBR) is
+    VP: VPG_DES;
+  begin
+    VP := RPG(RP).VP;
+--@ PUT("FREEING");PUT(VP);PUT(" FROM");PUT(RP);NEW_LINE;
+    if VP /= 0 then
+      INACTIVATE_RPG(RP);
+      if RPG(RP).CHANGED then
+	WRITE_RPG(RP);
+      end if;
+      VPG(VP).RP := 0;
+      RPG(RP).VP := 0;
+    end if;
+  end FREE_RPG;
+
+  procedure WRITE_RPG (RP: RPG_NBR) is
+  begin
+    -- PUT("WRITING");PUT(RPG(RP).VP);PUT(" FROM");PUT(RP);NEW_LINE;
+    WRITE(WORK_FILE, RPG(RP).DATA.all, POSITIVE_COUNT(RPG(RP).VP) + SKIP_COUNT);
+    RPG(RP).CHANGED := FALSE;
+  end WRITE_RPG;
+
+  procedure PRINT_TABLES is
+    begin
+    PUT_LINE("--------------------");
+    PUT("HIGH_VPG = ");PUT(HIGH_VPG);NEW_LINE;
+    PUT_LINE("VPG:");
+    for I in 1 .. HIGH_VPG loop
+      PUT(VPG(I).RP,3);
+      if (I mod 20) = 0 then
+	new_line;
+      else
+        put(' ');
+      end if;
+    end loop;
+
+    NEW_LINE;
+    PUT_LINE("RPG:");
+    for I in RPG_NBR loop
+      PUT(RPG(I).VP,3);PUT(" ");
+      PUT(RPG(I).AREA,3);PUT(" ");
+      PUT(RPG(I).CHANGED,5);PUT("; ");
+      if (I mod 5) = 0 then
+	new_line;
+      end if;
+    end loop;
+
+    PUT_LINE("AREA:");
+    for I in AREA_NBR loop
+      PUT(AREA(I).NVP,4);PUT(" ");
+      PUT(AREA(I).NLN,3);PUT(" ");
+      PUT(AREA(I).SAVE_NLN,4);PUT("; ");
+      if (I mod 5) = 0 then
+	new_line;
+      end if;
+    end loop;
+
+    PUT_LINE("--------------------");
+    end PRINT_TABLES;
+
+end PAGEMAN;

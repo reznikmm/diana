@@ -1,0 +1,10 @@
+package LTEXT_IO is
+  -- special version of text_io which forces lines <= 80 chars
+  -- required because Janus doesn't deal with page layout
+  procedure NEW_LINE;
+  procedure PUT(V: CHARACTER);
+  procedure PUT(V: STRING);
+  procedure PUT(V: INTEGER);
+  procedure PUT(V: INTEGER; W: INTEGER);
+  procedure PUT_LINE(V: STRING);
+end LTEXT_IO;

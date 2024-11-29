@@ -1,0 +1,165 @@
+with TEXT2_IO, USERPK, LALRIDL, DIANAMAN;
+use  TEXT2_IO, USERPK, LALRIDL, DIANAMAN;
+with TEXT_IO;
+
+procedure MAKEIDL is  -- Uses IDL in virtual memory and writes IDL Table
+
+  RESULT_FILE: TEXT_IO.FILE_TYPE;
+  DEFLIST: SEQ_TYPE;
+  RULE_COUNT: INTEGER := -1;
+  VOID_WAS_SEEN: BOOLEAN := FALSE;
+
+  procedure PROCESS_RULES(CLASS_RULE: TREE) is
+
+    SYL_LIST: SEQ_TYPE := LIST(CLASS_RULE);
+    SYL_NODE: TREE;
+    RULE_NODE: TREE;
+
+    VOID_SYM: TREE := STORESYM("void");
+    PREFIX: STRING(1..3);
+
+    procedure PUT_TERMINAL (TER : in TREE) is
+      TER_PREFIX: STRING(1..3) := "???";
+      TER_NAME: PNAME;
+    begin  -- PUT_TERMINAL
+      SET(TER_NAME, TO => PRINTNAME (D (XD_SYMREP, TER)));
+      if LENGTH(TER_NAME) >= 3 then
+	TER_PREFIX := TO_STRING(TER_NAME)(1..3);
+      end if;
+      if TER_PREFIX = PREFIX
+      or else (PREFIX = "   " and TER_PREFIX /= "as_"
+	       and TER_PREFIX /= "lx_" and TER_PREFIX /= "sm_")
+      then
+	if DI(XD_TER_NBR,TER) < 0 then
+	  PUT('A');
+	elsif PRINTNAME(D(LX_SRCPOS,TER)) = "Integer" then
+	  PUT('I');
+	elsif PRINTNAME(D(LX_SRCPOS,TER)) = "Boolean" then
+	  PUT('B');
+	else
+	  PUT('A');
+	end if;
+        PUT ("   ");
+        PUT ( DI (XD_TER_NBR, TER));
+        PUT("   ");
+        PUT_LINE (PRINTNAME (D (XD_SYMREP, TER)));
+      end if;
+    end PUT_TERMINAL;
+
+    procedure PUT_LIST_OF_TERS (TER_LIST_ARG: SEQ_TYPE) is
+      TER_LIST: SEQ_TYPE := TER_LIST_ARG;
+      TER: TREE;
+    begin
+      while not IS_EMPTY (TER_LIST)
+      loop
+	TER := HEAD(TER_LIST);
+        if KIND(TER) = DN_TERMINAL then
+	  PUT_TERMINAL ( TER );
+	end if;
+	TER_LIST := TAIL (TER_LIST);
+      end loop;
+    end PUT_LIST_OF_TERS;
+
+    procedure PUT_ENCLOSING_TERS(CLASS_NODE: TREE) is
+      TER_LIST: SEQ_TYPE;
+    begin
+      if CLASS_NODE /= CONST_VOID then
+        PUT_ENCLOSING_TERS(D(XD_IS_NULLABLE, CLASS_NODE));
+        TER_LIST := LIST(CLASS_NODE);
+        PUT_LIST_OF_TERS(TER_LIST);
+      end if;
+    end PUT_ENCLOSING_TERS;
+
+    procedure PUT_RULE (RULE: in TREE) is
+
+      TER_LIST	  :  SEQ_TYPE;
+      TER:	     TREE;
+
+    begin  --  PUT_RULE
+      PUT("N ");
+      RULE_COUNT := RULE_COUNT + 1;
+      PUT(RULE_COUNT, 3);
+      DI(XD_RULEINFO, RULE, RULE_COUNT);
+      PUT(' ');
+      PUT_LINE (PRINTNAME ( D (XD_NAME, RULE)));
+
+      PREFIX := "as_";
+      PUT_ENCLOSING_TERS(D(XD_IS_NULLABLE, RULE));
+      TER_LIST := LIST (RULE);
+      PUT_LIST_OF_TERS(TER_LIST);
+
+      PREFIX := "lx_";
+      PUT_ENCLOSING_TERS(D(XD_IS_NULLABLE, RULE));
+      TER_LIST := LIST (RULE);
+      PUT_LIST_OF_TERS(TER_LIST);
+
+      PREFIX := "sm_";
+      PUT_ENCLOSING_TERS(D(XD_IS_NULLABLE, RULE));
+      TER_LIST := LIST (RULE);
+      PUT_LIST_OF_TERS(TER_LIST);
+
+      PREFIX := "   ";
+      PUT_ENCLOSING_TERS(D(XD_IS_NULLABLE, RULE));
+      TER_LIST := LIST (RULE);
+      PUT_LIST_OF_TERS(TER_LIST);
+    end PUT_RULE;
+
+  begin  --  PROCESS_RULES
+    PUT("C ");
+    PUT_LINE(PRINTNAME(D(XD_NAME, CLASS_RULE)));
+
+    while not IS_EMPTY (SYL_LIST) loop
+      POP(SYL_LIST, SYL_NODE);
+      if KIND(SYL_NODE) = DN_NONTERMINAL then
+	RULE_NODE := D(XD_RULE, SYL_NODE);
+        if DI(XD_RULEINFO, RULE_NODE) < 0 then
+      	  PROCESS_RULES(D(XD_RULE, SYL_NODE));
+        else
+	  -- node void should be put out only once
+          if D(XD_NAME,RULE_NODE) /= VOID_SYM then
+            PUT_RULE(RULE_NODE);
+	  elsif not VOID_WAS_SEEN then
+            VOID_WAS_SEEN := TRUE;
+            PUT_RULE(RULE_NODE);
+	  end if;
+	end if;
+      else
+	-- Do not put out terminals at class level
+        --PUT_TERMINAL (HEAD(LIST(D(XD_SYMREP,SYL_NODE))));
+	null;
+      end if;
+    end loop;
+
+    PUT("E ");
+    PUT_LINE(PRINTNAME(D(XD_NAME, CLASS_RULE)));
+  end PROCESS_RULES;
+
+begin  --  PUTIDL
+  OPEN_DIANA;
+
+  CREATE(RESULT_FILE, NAME => "DIANATBL.NEW");
+  TEXT_IO.SET_OUTPUT(RESULT_FILE);
+
+  DEFLIST := LIST(STORESYM("STANDARD_IDL"));
+  if not IS_EMPTY(DEFLIST) then
+    PROCESS_RULES(HEAD(DEFLIST));
+  end if;
+
+  DEFLIST := LIST(STORESYM("ALL_SOURCE"));
+  if not IS_EMPTY(DEFLIST) then
+    PROCESS_RULES(HEAD(DEFLIST));
+  end if;
+
+  DEFLIST := LIST(STORESYM("TYPE_SPEC"));
+  if not IS_EMPTY(DEFLIST) then
+    PROCESS_RULES(HEAD(DEFLIST));
+  end if;
+
+  DEFLIST := LIST(STORESYM("NON_DIANA"));
+  if not IS_EMPTY(DEFLIST) then
+    PROCESS_RULES(HEAD(DEFLIST));
+  end if;
+
+  TEXT_IO.SET_OUTPUT(TEXT_IO.STANDARD_OUTPUT);
+  CLOSE(RESULT_FILE);
+end MAKEIDL;

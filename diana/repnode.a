@@ -1,0 +1,36 @@
+
+with DIANA, DIANATTR, DIANAMAN;
+use DIANA, DIANATTR, DIANAMAN;
+
+package body REPNODE is
+
+    function NODE_REP(NODE: TREE) return STRING is
+      NODE_TEXT: PNAME;
+
+      function ITOA(N: INTEGER) return STRING is
+        TXT: constant STRING := INTEGER'IMAGE(N);
+      begin
+        if TXT(1) = ' ' then
+          return TXT(2 .. TXT'LAST);
+	else
+	  return TXT;
+	end if;
+      end ITOA;
+
+    begin -- NODE_REP
+      if NODE.TTY not in 1 .. NODE_NAME'POS(NODE_NAME'LAST)
+      or NODE.TPG < 0 then
+        SET(NODE_TEXT, TO => '{' & ITOA(INTEGER(NODE.TTY)) & '}');
+      else
+        SET(NODE_TEXT, TO => NODE_IMAGE(NODE_NAME'VAL(NODE.TTY)));
+      end if;
+      if NODE.TTY = 0 and NODE.TPG = 0 then
+        return '<' & NODE_TEXT & '>';
+      else
+        return '<' & NODE_TEXT & '.'
+               & ITOA(INTEGER(NODE.TPG)) & '.'
+               & ITOA(INTEGER(NODE.TLN)) & '>';
+      end if;
+    end NODE_REP;
+
+end REPNODE;

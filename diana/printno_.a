@@ -1,0 +1,7 @@
+with USERPK; use USERPK;
+package PRINTNOD is
+  procedure PRINT_TREE(T:TREE);
+  function  L_PRINT_TREE(T:TREE) return NATURAL; -- returns nbr chrs
+  procedure PRINT_NODE(T:TREE); -- includes structure
+  procedure PRINT_NODE(T:TREE; IND:NATURAL); -- indent sub lines
+end PRINTNOD;

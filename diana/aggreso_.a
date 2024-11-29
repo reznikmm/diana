@@ -1,0 +1,58 @@
+with USERPK; use USERPK;
+with SETUTIL; use SETUTIL;
+with DEFUTIL; use DEFUTIL;
+with REQUTIL; use REQUTIL;
+
+package AGGRESO is
+
+    type AGGREGATE_ITEM_TYPE is private;
+
+    type AGGREGATE_ARRAY_TYPE
+		is array (POSITIVE range <>) of AGGREGATE_ITEM_TYPE;
+
+    function COUNT_AGGREGATE_CHOICES(ASSOC_S: TREE) return NATURAL;
+
+    procedure SPREAD_ASSOC_S
+		( ASSOC_S:		TREE
+		; AGGREGATE_ARRAY:	in out AGGREGATE_ARRAY_TYPE );
+
+    procedure WALK_RECORD_DECL_S
+		( EXP:			TREE
+		; DECL_S:		TREE
+		; AGGREGATE_ARRAY:	in out AGGREGATE_ARRAY_TYPE
+		; NORMALIZED_LIST:	in out SEQ_TYPE
+		; LAST_POSITIONAL:	in out NATURAL );
+
+    procedure RESOLVE_RECORD_ASSOC_S
+		( ASSOC_S:		TREE
+		; AGGREGATE_ARRAY:	in out AGGREGATE_ARRAY_TYPE );
+
+    function RESOLVE_EXP_OR_AGGREGATE
+		( EXP:			TREE
+		; SUBTYPE_SPEC:		TREE
+		; NAMED_OTHERS_OK:	BOOLEAN ) 
+	    return TREE;
+
+    procedure RESOLVE_AGGREGATE
+		( EXP:			TREE
+		; TYPE_SPEC:		TREE );
+
+    procedure RESOLVE_STRING
+		( EXP:			TREE
+		; TYPE_SPEC:		TREE );
+
+private
+
+    type AGGREGATE_ITEM_TYPE is
+	record
+	    FIRST:	POSITIVE; -- position of first choice in choice_s
+	    CHOICE:	TREE; -- from choice_exp
+	    ID:         TREE; -- dscrmt or component id
+	    ASSOC:	TREE; -- only for first choice
+	    EXP:	TREE; -- only for first choice
+	    TYPESET:	TYPESET_TYPE; -- only for first choice
+	    SEEN:	BOOLEAN; -- used to mark when formal seen for choice
+	    RESOLVED:	BOOLEAN; -- used to mark when exp resolved for assoc
+	end record;
+
+end AGGRESO;

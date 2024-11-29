@@ -1,0 +1,76 @@
+with USERPK; use USERPK;
+package UNIVOPS is
+
+  -- package intended for use only by U_Arith
+
+  URADIX: constant := 10_000; -- eventually 16#1000# (now hard-wired)
+
+  -- Universal integer in range -32768 .. 32767 is num_val pointer
+  -- outside that range, num_val node with even number of 16-bit
+  --   URadix-ary digits, 2 per attribute position
+  -- Negative indicated by excess URadix in first digit
+  -- Always normalized so that first two URadix-ary digits not both zero
+
+  -- Universal real is real_val node 
+  --   with value xd_numer/xd_denom in lowest terms
+  -- xd_denom > 0; xd_denom = 1 if xd_numer = 0
+
+  --the type Vector is used for in-memory workspace for manipulation
+  --of universal integers
+
+  type VECTOR_DIGITS is array(1..252) of SHORT;
+  -- pragma PACKED(VECTOR_DIGITS);
+
+  type VECTOR is
+    record
+      S: INTEGER;  -- sign; +1 or -1
+      L: INTEGER;  -- nbr sig digits
+      D: VECTOR_DIGITS; -- 10000-ary digits
+			-- .D(1) + 10000+n for negative in universal rec
+    end record;
+
+  --make Universal integer from vector
+  function U_INT(V:VECTOR) return TREE;
+
+  --make Universal real from vectors already in lowest terms
+  function U_REAL(N:VECTOR; D:VECTOR) return TREE;
+  --make Universal real from two universal integers (maybe not lowest terms)
+  function U_REAL(N:TREE; D:TREE) return TREE;
+
+  procedure SPREAD(I: TREE; U:in out VECTOR);
+  procedure SPREAD(I: INTEGER; U:in out VECTOR);
+  procedure NORMALIZE(V: in out VECTOR);
+
+  --copy A --R including sign
+  procedure V_COPY(A: VECTOR; R: out VECTOR);
+
+  -- Signs ignored in following routines
+  -- |R| + |A| --> |R|
+  procedure V_ADD(A: VECTOR; R: in out VECTOR);
+
+  -- |R| - |A| --> |R| ; assume |A| < |R|
+  procedure V_SUB(A: VECTOR; R: in out VECTOR);
+
+  -- |A| * |B| --> R
+  procedure V_MUL(A,B: VECTOR; R: in out VECTOR);
+
+  -- A * R --> R ; assume A > 0
+  procedure V_SCALE(A: INTEGER; R: in out VECTOR);
+
+  -- |R| / |A| --> Q remainder |R| assume A /= 0
+  procedure V_DIV(A: VECTOR; R, Q: in out VECTOR);
+
+  -- |R| / |A| --> ... remainder |R| ; assume A /= 0
+  procedure V_REM(A: VECTOR; R:in out VECTOR);
+
+  -- GCD(|A|,|B|) --> R
+  procedure V_GCD(A,B: VECTOR; R:in out VECTOR);
+
+  -- reduce |A|/|B| to lowest terms, assume B /= 0
+  procedure V_LOWEST_TERMS(A,B: in out VECTOR);
+
+  -- test |A| = |B|, |A| < |B|
+  function V_EQUAL(A,B: VECTOR) return BOOLEAN;
+  function V_LESS(A,B: VECTOR) return BOOLEAN;
+
+end UNIVOPS;

@@ -1,0 +1,1768 @@
+with TEXT2_IO; use TEXT2_IO;
+with DIANA, DIANAMAN, DIANATTR; use DIANA, DIANAMAN, DIANATTR;
+with DEFUTIL; use DEFUTIL;
+with VISUTIL; use VISUTIL;
+with MAKENOD; use MAKENOD;
+with UARITH;
+with SEMGLOB; use SEMGLOB;
+with EXPTYPE, EXPRESO; use EXPTYPE, EXPRESO;
+with REQUTIL; use REQUTIL;
+with REDSUBP; use REDSUBP;
+with DEFWALK; use DEFWALK;
+with SETUTIL; use SETUTIL;
+with STMWALK; use STMWALK;
+with PREFCNS;
+with PRAWALK; use PRAWALK;
+with ATTWALK; use ATTWALK;
+with HOMUNIT; use HOMUNIT;
+with INSTANT;
+with DERIVED; use DERIVED; -- Remember_Derived_Decl
+with REPCLAU;
+
+package body NODWALK is
+
+    EQUAL_SYM: TREE := CONST_VOID; -- storesym("=");
+    NOT_EQUAL_SYM: TREE := CONST_VOID; -- storesym("/=");
+
+    procedure WALK_HEADER(NODE: TREE; H: H_TYPE);
+    procedure SWITCH_REGION (GENERIC_ID, REGION_DEF: TREE);
+    procedure WALK_UNIT_DESC
+		( SOURCE_NAME:	TREE
+		; NODE: TREE
+		; H: H_TYPE
+		; HEADER: TREE := CONST_VOID );
+    procedure INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S
+		( SOURCE_NAME_S:	TREE
+		; OBJ_TYPE:		TREE
+		; INIT_EXP:		TREE := CONST_VOID );
+    procedure FINISH_PARAM_DECL(NODE: TREE; H: H_TYPE);
+    procedure FINISH_VARIABLE_DECL(NODE: TREE; H: H_TYPE);
+    function IS_CONSTANT_EXP (EXP: TREE) return BOOLEAN;
+    procedure REPROCESS_USE_CLAUSES(DECL_S: TREE; H: H_TYPE);
+    procedure FIXUP_CONSTRAINED_ARRAY_OBJECTS(SOURCE_NAME_S: TREE; H: H_TYPE);
+    procedure CHECK_EQUALITY_OPERATOR(OPERATOR_ID: TREE; H: H_TYPE);
+
+    -- $$$$ should be combined with upper case for make_used_op_from_string
+    procedure FORCE_UPPER_CASE(OPERATOR_ID: TREE) is
+	function MAKE_UPPER_CASE(A_IN: STRING) return STRING is
+            MAGIC: constant := CHARACTER'POS('a') - CHARACTER'POS('A');
+            A: STRING (A_IN'RANGE) := A_IN;
+	begin
+            for II in A'RANGE loop
+                if A(II) in 'a' .. 'z' then
+                    A(II) := CHARACTER'VAL(CHARACTER'POS(A(II)) - MAGIC);
+		end if;
+	    end loop;
+	    return A;
+	end MAKE_UPPER_CASE;
+
+    begin
+	D(LX_SYMREP, OPERATOR_ID, STORESYM
+		( MAKE_UPPER_CASE(PRINTNAME(D(LX_SYMREP, OPERATOR_ID))) ) );
+    end FORCE_UPPER_CASE;
+
+    procedure WALK(NODE: TREE; H: H_TYPE) is
+
+    begin
+	if NODE = CONST_VOID then
+	    return;
+	end if;
+
+        PUT("Walk "); PUT_LINE(NODE_REP(NODE));
+
+        case CLASS_ITEM'(KIND(NODE)) is
+
+
+	-- for a discriminant or a parameter declaration
+	when DN_DSCRMT_DECL | DN_IN | DN_IN_OUT | DN_OUT =>
+	    declare
+		SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+	    begin
+
+		-- insert source names in environment
+		-- (other processing handled in enclosing declaration)
+		WALK_SOURCE_NAME_S(SOURCE_NAME_S, H);
+	    end;
+
+
+	-- for a constant declaration
+	when DN_CONSTANT_DECL =>
+	    declare
+		SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+		EXP: TREE := D(AS_EXP, NODE);
+		TYPE_DEF: TREE := D(AS_TYPE_DEF, NODE);
+
+		TYPE_SPEC: TREE;
+		TYPESET: TYPESET_TYPE;
+	    begin
+
+		-- insert names in the environment
+		WALK_SOURCE_NAME_S(SOURCE_NAME_S, H);
+
+		-- if declaration contains a constrained array definition
+		if KIND(TYPE_DEF) = DN_CONSTRAINED_ARRAY_DEF then
+
+		    -- evaluate the type definition
+		    TYPE_SPEC := EVAL_TYPE_DEF
+			    (TYPE_DEF, HEAD(LIST(SOURCE_NAME_S)), H);
+
+		-- else -- since declaration contains a subtype indication
+		else
+
+		    -- evaluate and resolve the subtype indication
+		    TYPE_SPEC := EVAL_SUBTYPE_INDICATION(TYPE_DEF);
+		    RESOLVE_SUBTYPE_INDICATION(TYPE_DEF, TYPE_SPEC);
+		    D(AS_TYPE_DEF, NODE, TYPE_DEF);
+		end if;
+
+		-- evaluate and resolve expression (one must be given)
+		EVAL_EXP_TYPES(EXP, TYPESET);
+		REQUIRE_TYPE(GET_BASE_TYPE(TYPE_SPEC), EXP, TYPESET);
+		REQUIRE_NONLIMITED_TYPE(EXP, TYPESET);
+		EXP := RESOLVE_EXP(EXP, TYPESET);
+		D(AS_EXP, NODE, EXP);
+
+		-- complete source_name definitions and make visible
+		INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S(SOURCE_NAME_S
+				, OBJ_TYPE => TYPE_SPEC
+				, INIT_EXP => EXP);
+
+		-- if type definition is a constrained array definition
+		if KIND(TYPE_DEF) = DN_CONSTRAINED_ARRAY_DEF then
+
+                    -- make distinct copies of array type_spec's
+		    -- ... and generate predefined operators
+		    FIXUP_CONSTRAINED_ARRAY_OBJECTS(SOURCE_NAME_S, H);
+		end if;
+	    end;
+
+
+	-- for a variable declaration
+	when DN_VARIABLE_DECL =>
+	    declare
+		SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+		EXP: TREE := D(AS_EXP, NODE);
+		TYPE_DEF: TREE := D(AS_TYPE_DEF, NODE);
+
+		TYPE_SPEC: TREE;
+		TYPESET: TYPESET_TYPE;
+	    begin
+		-- insert names in the environment
+		WALK_SOURCE_NAME_S(SOURCE_NAME_S, H);
+
+		-- if declaration contains a constrained array definition
+		if KIND(TYPE_DEF) = DN_CONSTRAINED_ARRAY_DEF then
+
+		    -- evaluate the type definition
+		    TYPE_SPEC := EVAL_TYPE_DEF
+			    (TYPE_DEF, HEAD(LIST(SOURCE_NAME_S)), H);
+
+		-- else -- since declaration contains a subtype indication
+		else
+
+		    -- evaluate and resolve the subtype indication
+		    TYPE_SPEC := EVAL_SUBTYPE_INDICATION(TYPE_DEF);
+		    RESOLVE_SUBTYPE_INDICATION(TYPE_DEF, TYPE_SPEC);
+		    D(AS_TYPE_DEF, NODE, TYPE_DEF);
+		end if;
+
+		-- if an expression is given
+		if EXP /= CONST_VOID then
+
+		    -- evaluate and resolve expression
+		    EVAL_EXP_TYPES(EXP, TYPESET);
+		    REQUIRE_TYPE(GET_BASE_TYPE(TYPE_SPEC), EXP, TYPESET);
+		    REQUIRE_NONLIMITED_TYPE(EXP, TYPESET);
+		    EXP := RESOLVE_EXP(EXP, TYPESET);
+		    D(AS_EXP, NODE, EXP);
+		end if;
+
+		-- complete source_name definitions and make visible
+		INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S(SOURCE_NAME_S
+				, OBJ_TYPE => TYPE_SPEC
+				, INIT_EXP => EXP);
+
+		-- if type definition is a constrained array definition
+		if KIND(TYPE_DEF) = DN_CONSTRAINED_ARRAY_DEF then
+
+                    -- make distinct copies of array type_spec's
+		    -- ... and generate predefined operators
+		    FIXUP_CONSTRAINED_ARRAY_OBJECTS(SOURCE_NAME_S, H);
+		end if;
+	    end;
+
+
+	-- for a number declaration
+	when DN_NUMBER_DECL =>
+	    declare
+		SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+		EXP: TREE := D(AS_EXP, NODE);
+
+		TYPE_SPEC: TREE;
+		TYPESET: TYPESET_TYPE;
+	    begin
+		-- insert names in the environment
+		WALK_SOURCE_NAME_S(SOURCE_NAME_S, H);
+
+		-- evaluate and resolve [universal] subtype
+		EVAL_EXP_TYPES(EXP, TYPESET);
+		REQUIRE_UNIVERSAL_TYPE(EXP, TYPESET);
+		REQUIRE_UNIQUE_TYPE(EXP, TYPESET);
+		TYPE_SPEC := GET_THE_TYPE(TYPESET);
+		EXP := RESOLVE_EXP(EXP, TYPE_SPEC);
+
+		-- complete source_name definitions and make visible
+		INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S(SOURCE_NAME_S
+				, OBJ_TYPE => TYPE_SPEC
+				, INIT_EXP => EXP);
+	    end;
+
+
+	when DN_EXCEPTION_DECL =>
+	    declare
+		SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+	    begin
+		-- add names to environment
+		WALK_SOURCE_NAME_S(SOURCE_NAME_S, H);
+
+		-- check for unique names and make visible
+		CHECK_UNIQUE_SOURCE_NAME_S(SOURCE_NAME_S);
+	    end;
+
+
+	when DN_DEFERRED_CONSTANT_DECL =>
+	    declare
+		SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+		NAME: TREE := D(AS_NAME, NODE);
+
+		TYPE_SPEC: TREE;
+		TYPESET: TYPESET_TYPE;
+	    begin
+
+		-- insert names in the environment
+		WALK_SOURCE_NAME_S(SOURCE_NAME_S, H);
+
+		-- evaluate and resolve subtype
+		TYPE_SPEC := EVAL_TYPE_MARK(NAME);
+		if TYPE_SPEC /= CONST_VOID then
+		    -- get subtype spec for the type mark
+		    TYPE_SPEC := D(SM_TYPE_SPEC, GET_NAME_DEFN(NAME));
+		end if;
+		NAME := RESOLVE_TYPE_MARK(NAME);
+		D(AS_NAME, NODE, NAME);
+
+		-- check that current declaration is in visible part
+		-- ... and that type is private type is defined in this region
+		-- ... (outside the package, sm_type_spec is not void)
+		if not H.IS_IN_SPEC
+		or else KIND(GET_BASE_TYPE(TYPE_SPEC)) not in CLASS_PRIVATE_SPEC
+		then
+                    ERROR(D(LX_SRCPOS,NODE), "Deferred constant not allowed");
+		end if;
+
+		-- complete source_name definitions and make visible
+		INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S(SOURCE_NAME_S
+				, OBJ_TYPE => TYPE_SPEC
+				, INIT_EXP => CONST_VOID);
+	    end;
+
+
+	when DN_TYPE_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		DSCRMT_DECL_S: TREE := D(AS_DSCRMT_DECL_S, NODE);
+		TYPE_DEF: TREE := D(AS_TYPE_DEF, NODE);
+
+		SOURCE_DEF: TREE := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		TYPE_SPEC: TREE;
+
+		PRIOR_DEF: TREE;
+		PRIOR_NAME: TREE;
+		PRIOR_SPEC: TREE := CONST_VOID;
+		NEW_DSCRMT_DECL_S: TREE := DSCRMT_DECL_S;
+		H: H_TYPE := WALK.H;
+		S: S_TYPE;
+	    begin
+
+		-- if there is a prior definition of the type name
+		PRIOR_DEF := GET_PRIOR_DEF(SOURCE_DEF);
+		if PRIOR_DEF /= CONST_VOID then
+
+		    -- get the corresponding id
+		    PRIOR_NAME := D(XD_SOURCE_NAME, PRIOR_DEF);
+
+		    -- if it is a [limited] private type id
+		    if KIND(PRIOR_NAME)
+				 in DN_PRIVATE_TYPE_ID .. DN_L_PRIVATE_TYPE_ID
+		    then
+
+			-- get the [limited] private type spec
+			PRIOR_SPEC := D(SM_TYPE_SPEC, PRIOR_NAME);
+
+			-- if full type already declared
+			-- ... or we are in the visible part of a package
+			if D(SM_TYPE_SPEC,PRIOR_SPEC) /= CONST_VOID
+			or else H.IS_IN_SPEC then
+
+			    -- remember that this one is in error
+			    PRIOR_SPEC := CONST_VOID;
+			end if;
+
+		    -- else if it is a type id
+		    elsif KIND(PRIOR_NAME) = DN_TYPE_ID then
+
+			-- get the corresponding type spec
+			PRIOR_SPEC := D(SM_TYPE_SPEC, PRIOR_NAME);
+
+			-- if it is not an incomplete type spec
+			-- ... or full type already declared
+			if KIND(PRIOR_SPEC) /= DN_INCOMPLETE
+			or else D(XD_FULL_TYPE_SPEC, PRIOR_SPEC) /= CONST_VOID
+			then
+
+			    -- remember that this one is in error
+			    PRIOR_SPEC := CONST_VOID;
+			end if;
+		    end if;
+
+		    -- if it is not a possible full type def
+		    if KIND(TYPE_DEF)
+				not in DN_ENUMERATION_DEF .. DN_RECORD_DEF
+		    then
+
+			-- it is in error
+			PRIOR_SPEC := CONST_VOID;
+		    end if;
+
+		    -- if redeclaration is illegal
+		    if PRIOR_SPEC = CONST_VOID then
+
+			-- emit message
+                        ERROR(D(LX_SRCPOS,NODE), "Redeclaration of type name");
+
+			-- make the prior def in error
+			MAKE_DEF_IN_ERROR(PRIOR_DEF);
+
+			-- pretend there was no prior def
+			PRIOR_DEF := CONST_VOID;
+		    end if;
+		end if;
+
+		-- if discriminants were given
+		if DSCRMT_DECL_S /= CONST_VOID
+		and then not IS_EMPTY(LIST(DSCRMT_DECL_S)) then
+
+		    -- walk the discriminants
+                    -- ... (in the record's declarative region)
+		    ENTER_REGION(SOURCE_DEF, H, S);
+		    --WALK_ITEM_S(DSCRMT_DECL_S, H);
+		    FINISH_PARAM_S(DSCRMT_DECL_S, H);
+		    LEAVE_REGION(SOURCE_DEF, S);
+		    H := WALK.H;
+
+		    if KIND(TYPE_DEF) not in DN_ACCESS_DEF .. DN_L_PRIVATE_DEF
+		    and then TYPE_DEF /= CONST_VOID
+		    then
+			ERROR(D(LX_SRCPOS,DSCRMT_DECL_S),
+                                    "Discriminants not allowed");
+		    elsif PRIOR_DEF /= CONST_VOID then
+			if D(SM_DISCRIMINANT_S,PRIOR_SPEC) = CONST_VOID
+			or else IS_EMPTY(LIST(D(SM_DISCRIMINANT_S,PRIOR_SPEC)))
+			then
+			    ERROR(D(LX_SRCPOS,DSCRMT_DECL_S)
+                                   , "First declaration had no discriminants");
+			else
+			    NEW_DSCRMT_DECL_S
+					:= D(SM_DISCRIMINANT_S, PRIOR_SPEC);
+			    CONFORM_PARAMETER_LISTS
+					( NEW_DSCRMT_DECL_S
+					, DSCRMT_DECL_S );
+			    NEW_DSCRMT_DECL_S
+					:= D(SM_DISCRIMINANT_S, PRIOR_SPEC);
+			    if KIND(TYPE_DEF) /= DN_RECORD_DEF then
+				ERROR(D(LX_SRCPOS,DSCRMT_DECL_S)
+                                            , "Full type must be record");
+			    end if;
+			end if;
+		    end if;
+		end if;
+
+		if PRIOR_DEF /= CONST_VOID then
+		    D(SM_FIRST, SOURCE_NAME, PRIOR_NAME);
+		else
+		    PRIOR_DEF := SOURCE_DEF;
+		    PRIOR_NAME := SOURCE_NAME;
+		end if;
+
+		if TYPE_DEF = CONST_VOID then
+		    ENTER_REGION(PRIOR_DEF, H, S);
+		    TYPE_SPEC := MAKE_INCOMPLETE
+				( SM_DISCRIMINANT_S => NEW_DSCRMT_DECL_S
+				, XD_SOURCE_NAME => SOURCE_NAME );
+		    LEAVE_REGION(PRIOR_DEF, S);
+		else
+		    TYPE_SPEC := EVAL_TYPE_DEF
+				(TYPE_DEF, PRIOR_NAME, H, NEW_DSCRMT_DECL_S);
+		    if KIND(TYPE_DEF) = DN_DERIVED_DEF then
+			REMEMBER_DERIVED_DECL(NODE);
+		    end if;
+		end if;
+
+		D(SM_TYPE_SPEC, SOURCE_NAME, TYPE_SPEC);
+		if TYPE_SPEC /= CONST_VOID then
+		    if PRIOR_DEF /= SOURCE_DEF then
+			REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+			if PRIOR_SPEC /= CONST_VOID then
+			    if KIND(PRIOR_SPEC) = DN_INCOMPLETE then
+				D(XD_FULL_TYPE_SPEC, PRIOR_SPEC, TYPE_SPEC);
+			    else
+				D(SM_TYPE_SPEC, PRIOR_SPEC, TYPE_SPEC);
+			    end if;
+			end if;
+		    else
+			MAKE_DEF_VISIBLE(SOURCE_DEF);
+		    end if;
+		    PREFCNS.GEN_PREDEFINED_OPERATORS
+				(GET_BASE_TYPE(TYPE_SPEC), H);
+		else
+		    MAKE_DEF_IN_ERROR(SOURCE_DEF);
+		end if;
+	    end;
+
+
+	when DN_SUBTYPE_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		SUBTYPE_INDICATION: TREE := D(AS_SUBTYPE_INDICATION, NODE);
+
+		SOURCE_DEF: TREE := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		TYPE_SPEC: TREE;
+	    begin
+		TYPE_SPEC := EVAL_TYPE_DEF(SUBTYPE_INDICATION, SOURCE_NAME, H);
+		D(SM_TYPE_SPEC, SOURCE_NAME, TYPE_SPEC);
+		if TYPE_SPEC /= CONST_VOID then
+		    MAKE_DEF_VISIBLE(SOURCE_DEF);
+		else
+		    MAKE_DEF_IN_ERROR(SOURCE_DEF);
+		end if;
+	    end;
+
+
+	when DN_TASK_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		DECL_S: TREE := D(AS_DECL_S, NODE);
+
+		H: H_TYPE := WALK.H;
+		S: S_TYPE;
+		SOURCE_DEF: TREE := MAKE_DEF_FOR_ID(SOURCE_NAME,H);
+		PRIOR_DEF: TREE;
+
+		TASK_SPEC: TREE := MAKE_TASK_SPEC
+			( SM_DECL_S => DECL_S
+			, XD_SOURCE_NAME => SOURCE_NAME );
+	    begin
+		if KIND(SOURCE_NAME) = DN_TYPE_ID then
+		    D(SM_FIRST, SOURCE_NAME, SOURCE_NAME);
+		    D(SM_TYPE_SPEC, SOURCE_NAME, TASK_SPEC);
+		    PRIOR_DEF := GET_PRIOR_DEF(SOURCE_DEF);
+		    if PRIOR_DEF /= CONST_VOID then
+			if KIND(D(XD_SOURCE_NAME,PRIOR_DEF))
+				 = DN_L_PRIVATE_TYPE_ID
+			then
+			    REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+			    D(SM_FIRST, SOURCE_NAME
+				     , D(XD_SOURCE_NAME, PRIOR_DEF));
+			    D(SM_TYPE_SPEC
+				    , D(SM_TYPE_SPEC
+					    , D(XD_SOURCE_NAME, PRIOR_DEF) )
+				    , TASK_SPEC);
+			    SOURCE_DEF := PRIOR_DEF;
+			elsif ( KIND(D(XD_SOURCE_NAME,PRIOR_DEF)) = DN_TYPE_ID
+				and then KIND(D(SM_TYPE_SPEC
+					    , D(XD_SOURCE_NAME,PRIOR_DEF) ))
+					= DN_INCOMPLETE )
+			then
+			    REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+			    D(SM_FIRST, SOURCE_NAME
+				     , D(XD_SOURCE_NAME, PRIOR_DEF));
+			    D(XD_FULL_TYPE_SPEC
+				    , D(SM_TYPE_SPEC
+					    , D(XD_SOURCE_NAME, PRIOR_DEF) )
+				    , TASK_SPEC);
+			    SOURCE_DEF := PRIOR_DEF;
+			else
+			    ERROR(D(LX_SRCPOS,SOURCE_NAME),
+                                        "Duplicate name for task - "
+					& PRINTNAME(D(LX_SYMREP,SOURCE_NAME)) );
+			    MAKE_DEF_IN_ERROR(SOURCE_DEF);
+			end if;
+			D(XD_SOURCE_NAME
+				, TASK_SPEC
+				, D(XD_SOURCE_NAME, SOURCE_DEF) );
+		    else
+			MAKE_DEF_VISIBLE(SOURCE_DEF);
+		    end if;
+		else
+		    D(SM_OBJ_TYPE, SOURCE_NAME, TASK_SPEC);
+		    CHECK_UNIQUE_DEF(SOURCE_DEF);
+		end if;
+
+		ENTER_REGION(SOURCE_DEF, H, S);
+		WALK_ITEM_S(DECL_S, H);
+		LEAVE_REGION(SOURCE_DEF, S);
+	    end;
+
+
+	when DN_GENERIC_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		HEADER: TREE := D(AS_HEADER, NODE);
+		ITEM_S: TREE := D(AS_ITEM_S, NODE);
+		ITEM_LIST: SEQ_TYPE := LIST(ITEM_S);
+		ITEM: TREE;
+
+		H: H_TYPE := WALK.H;
+		S: S_TYPE;
+		SOURCE_DEF: TREE := MAKE_DEF_FOR_ID(SOURCE_NAME,H);
+	    begin
+		D(SM_FIRST, SOURCE_NAME, SOURCE_NAME);
+		D(SM_SPEC, SOURCE_NAME, HEADER);
+		D(SM_GENERIC_PARAM_S, SOURCE_NAME, ITEM_S);
+
+		CHECK_UNIQUE_DEF(SOURCE_DEF);
+
+		ENTER_REGION(SOURCE_DEF, H, S);
+		while not IS_EMPTY(ITEM_LIST) loop
+		    POP(ITEM_LIST, ITEM);
+		    WALK(ITEM, H);
+		    if KIND(ITEM) in CLASS_PARAM then
+			FINISH_PARAM_DECL(ITEM,H);
+		    end if;
+		end loop;
+		H.SUBP_SYMREP := D(LX_SYMREP, SOURCE_NAME);
+		--if KIND(HEADER) in CLASS_SUBP_ENTRY_HEADER then
+		--    WALK_ITEM_S(D(AS_PARAM_S,HEADER), H);
+		--end if;
+		WALK_HEADER(HEADER, H);
+		LEAVE_REGION(SOURCE_DEF, S);
+		MAKE_DEF_VISIBLE(SOURCE_DEF, HEADER);
+	    end;
+
+
+	when DN_SUBPROG_ENTRY_DECL =>
+	    declare		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		HEADER: TREE := D(AS_HEADER, NODE);
+		UNIT_KIND: TREE := D(AS_UNIT_KIND, NODE);
+
+		H: H_TYPE := WALK.H;
+		S: S_TYPE;
+		SOURCE_DEF: TREE;
+		PRIOR_DEF: TREE;
+	    begin
+		if KIND(SOURCE_NAME) = DN_OPERATOR_ID then
+		    FORCE_UPPER_CASE(SOURCE_NAME);
+		end if;
+		SOURCE_DEF := MAKE_DEF_FOR_ID(SOURCE_NAME,H);
+		D(SM_SPEC, SOURCE_NAME, HEADER);
+		if KIND(SOURCE_NAME) /= DN_ENTRY_ID then
+		    D(SM_FIRST, SOURCE_NAME, SOURCE_NAME);
+		    D(SM_UNIT_DESC, SOURCE_NAME, UNIT_KIND);
+		end if;
+
+		if HEADER /= CONST_VOID then
+		    ENTER_REGION(SOURCE_DEF, H, S);
+		    H.SUBP_SYMREP := D(LX_SYMREP, SOURCE_NAME);
+		    --WALK_ITEM_S(D(AS_PARAM_S,HEADER), H);
+		    WALK_HEADER(HEADER, H);
+		    LEAVE_REGION(SOURCE_DEF, S);
+		    H := WALK.H;
+		end if;
+		WALK_UNIT_DESC(SOURCE_NAME, UNIT_KIND, H, HEADER);
+		HEADER := D(SM_SPEC, SOURCE_NAME); -- in case instantiation
+		if KIND(HEADER) = DN_ENTRY
+		and then D(AS_DISCRETE_RANGE, HEADER) /= CONST_VOID then
+		    -- it is an entry family
+		    MAKE_DEF_VISIBLE(SOURCE_DEF);
+		    PRIOR_DEF := GET_PRIOR_DEF(SOURCE_DEF);
+		else
+		    MAKE_DEF_VISIBLE(SOURCE_DEF, HEADER);
+		    PRIOR_DEF := GET_PRIOR_HOMOGRAPH_DEF(SOURCE_DEF);
+		end if;
+		if PRIOR_DEF /= CONST_VOID then
+		    if D(XD_HEADER, PRIOR_DEF) /= CONST_FALSE then
+			ERROR(D(LX_SRCPOS,SOURCE_NAME)
+                                    , "Duplicate def for subprogram name - "
+				      &  PRINTNAME(D(LX_SYMREP,SOURCE_NAME)) );
+		    end if;
+		    MAKE_DEF_IN_ERROR(SOURCE_DEF);
+		else
+		    CHECK_EQUALITY_OPERATOR(SOURCE_NAME, H);
+		end if;
+	    end;
+
+
+	when DN_PACKAGE_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		HEADER: TREE := D(AS_HEADER, NODE);
+		UNIT_KIND: TREE := D(AS_UNIT_KIND, NODE);
+
+		H: H_TYPE := WALK.H;
+		S: S_TYPE;
+		SOURCE_DEF: TREE := MAKE_DEF_FOR_ID(SOURCE_NAME,H);
+	    begin
+		D(SM_FIRST, SOURCE_NAME, SOURCE_NAME);
+		D(SM_SPEC, SOURCE_NAME, HEADER);
+		D(SM_UNIT_DESC, SOURCE_NAME, UNIT_KIND);
+
+		CHECK_UNIQUE_DEF(SOURCE_DEF);
+		WALK_UNIT_DESC(SOURCE_NAME, UNIT_KIND, H);
+		MAKE_DEF_VISIBLE(SOURCE_DEF);
+		if HEADER /= CONST_VOID then
+		    ENTER_REGION(SOURCE_DEF, H, S);
+		    WALK_HEADER(HEADER, H);
+		    LEAVE_REGION(SOURCE_DEF, S);
+		end if;
+	    end;
+
+	-- for a renaming declaration for an object
+	when DN_RENAMES_OBJ_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		NAME: TREE := D(AS_NAME, NODE);
+		TYPE_MARK_NAME: TREE := D(AS_TYPE_MARK_NAME, NODE);
+
+		SOURCE_DEF: TREE := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		BASE_TYPE: TREE;
+		TYPESET: TYPESET_TYPE;
+	    begin
+		-- evaluate and resolve the type mark
+		BASE_TYPE := GET_BASE_TYPE(EVAL_TYPE_MARK(TYPE_MARK_NAME));
+		TYPE_MARK_NAME := RESOLVE_TYPE_MARK(TYPE_MARK_NAME);
+		D(AS_TYPE_MARK_NAME, NODE, TYPE_MARK_NAME);
+
+		-- evaluate the name being redefined; require same base type
+		EVAL_EXP_TYPES(NAME, TYPESET);
+		REQUIRE_TYPE(BASE_TYPE, NAME, TYPESET);
+		NAME := RESOLVE_EXP(NAME, TYPESET);
+
+		-- if a constant (or in parameter) is being renamed
+		if IS_CONSTANT_EXP(NAME) then
+
+		    -- replace variable_id with constant_id
+		    -- sm_first added 8-17-91 wbe
+		    SOURCE_NAME := MAKE_CONSTANT_ID
+			    ( LX_SRCPOS => D(LX_SRCPOS, SOURCE_NAME)
+			    , LX_SYMREP => D(LX_SYMREP, SOURCE_NAME)
+			    , XD_REGION => D(XD_REGION, SOURCE_NAME) );
+		    D(SM_FIRST, SOURCE_NAME, SOURCE_NAME);
+		    D(AS_SOURCE_NAME, NODE, SOURCE_NAME);
+		    -- fix up def to point to newly-created constant_id
+		    D(XD_SOURCE_NAME, SOURCE_DEF, SOURCE_NAME);
+		end if;
+
+		-- store remaining attributes of source name
+		D(SM_INIT_EXP, SOURCE_NAME, NAME);
+		DB(SM_RENAMES_OBJ, SOURCE_NAME, TRUE);
+		D(SM_OBJ_TYPE, SOURCE_NAME, D(SM_EXP_TYPE, NAME));
+
+		-- check that source name is unique and make it visible
+		CHECK_UNIQUE_DEF(SOURCE_DEF);
+	    end;
+
+
+	when DN_RENAMES_EXC_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		NAME: TREE := D(AS_NAME, NODE);
+
+		SOURCE_DEF: TREE := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+	    begin
+
+		-- walk the redefined exception name
+		NAME := WALK_NAME(DN_EXCEPTION_ID, NAME);
+		D(AS_NAME, NODE, NAME);
+
+		-- $$$$ what about when name is a renamed exception ?
+
+		-- insert redefined name in source name
+		if KIND(NAME) = DN_SELECTED then
+		    NAME := D(AS_DESIGNATOR, NAME);
+		end if;
+		D(SM_RENAMES_EXC, SOURCE_NAME, D(SM_DEFN,NAME));
+
+                -- added 6/29/90 (omitted.  why wasn't it found by acvc?)
+		-- check for unique names and make visible
+		CHECK_UNIQUE_DEF(SOURCE_DEF);
+	    end;
+
+
+	when DN_NULL_COMP_DECL =>
+	    declare
+	    begin
+		null;
+	    end;
+
+
+	when DN_LENGTH_ENUM_REP =>
+	    declare
+		NAME: TREE := D(AS_NAME, NODE);
+		EXP: TREE := D(AS_EXP, NODE);
+	    begin
+		-- if it is a length clause
+		if KIND(NAME) = DN_ATTRIBUTE then
+		    REPCLAU.RESOLVE_LENGTH_REP(NAME,EXP,H);
+		    D(AS_EXP, NODE, EXP);
+
+		-- else -- it is an enumeration representation clause
+		-- ... (by syntax -- name is used_object_id, exp is aggregate)
+		else
+		    REPCLAU.RESOLVE_ENUM_REP(NAME,EXP,H);
+		    D(AS_NAME, NODE, NAME);
+		end if;
+	    end;
+
+
+	when DN_ADDRESS =>
+	    declare
+		NAME: TREE := D(AS_NAME, NODE);
+		EXP: TREE := D(AS_EXP, NODE);
+	    begin
+		REPCLAU.RESOLVE_ADDRESS_REP(NAME,EXP,H);
+		D(AS_NAME, NODE, NAME);
+		D(AS_EXP, NODE, EXP);
+	    end;
+
+
+	when DN_RECORD_REP =>
+	    declare
+		NAME: TREE := D(AS_NAME, NODE);
+		ALIGNMENT_CLAUSE: TREE := D(AS_ALIGNMENT_CLAUSE, NODE);
+		COMP_REP_S: TREE := D(AS_COMP_REP_S, NODE);
+	    begin
+		REPCLAU.RESOLVE_RECORD_REP(NAME,ALIGNMENT_CLAUSE,COMP_REP_S,H);
+		D(AS_NAME, NODE, NAME);
+		D(AS_ALIGNMENT_CLAUSE, NODE, ALIGNMENT_CLAUSE);
+		D(AS_COMP_REP_S, NODE, COMP_REP_S);
+		if KIND(D(SM_DEFN,NAME)) in CLASS_TYPE_NAME
+		and KIND(GET_BASE_TYPE(NAME)) = DN_RECORD then
+		    D(SM_REPRESENTATION, GET_BASE_TYPE(NAME), NODE);
+		end if;
+	    end;
+
+
+	-- for a use clause (not part of a context clause)
+	when DN_USE =>
+	    declare
+		NAME_S: TREE := D(AS_NAME_S, NODE);
+
+		NAME_LIST: SEQ_TYPE := LIST(NAME_S);
+		NAME: TREE;
+		NAME_DEFN: TREE;
+		NEW_NAME_LIST: SEQ_TYPE := MAKE;
+		PACKAGE_DEF: TREE;
+	    begin
+
+		-- for each used name
+		while not IS_EMPTY(NAME_LIST) loop
+		    POP(NAME_LIST, NAME);
+
+		    -- evaluate and resolve package name
+		    NAME := WALK_NAME(DN_PACKAGE_ID, NAME);
+		    NEW_NAME_LIST := APPEND(NEW_NAME_LIST, NAME);
+
+		    -- get the package id of the original (unrenamed) package
+		    loop
+			if KIND(NAME) = DN_SELECTED then
+			    NAME := D(AS_DESIGNATOR, NAME);
+			end if;
+			NAME_DEFN := D(SM_DEFN, NAME);
+			exit
+			    when KIND(NAME_DEFN) /= DN_PACKAGE_ID
+			    or else KIND(D(SM_UNIT_DESC, NAME_DEFN))
+					/= DN_RENAMES_UNIT;
+			NAME := D(AS_NAME, D(SM_UNIT_DESC, NAME_DEFN));
+		    end loop;
+
+		    -- if it is indeed a package id
+		    if KIND(NAME_DEFN) = DN_PACKAGE_ID then
+
+			-- get the def corresponding to the package
+			PACKAGE_DEF := GET_DEF_FOR_ID(NAME_DEFN);
+
+			-- if it is not an enclosing region and not used
+			if DI(XD_LEX_LEVEL, PACKAGE_DEF) <= 0
+			and then not DB(XD_IS_USED, PACKAGE_DEF) then
+
+			    -- mark it used
+			    DB(XD_IS_USED, PACKAGE_DEF, TRUE);
+
+			    -- add it to list of used regions
+			    SU.USED_PACKAGE_LIST
+				    := INSERT(SU.USED_PACKAGE_LIST,PACKAGE_DEF);
+			end if;
+		    end if;
+		end loop;
+
+		-- replace name list with list of resolved names
+		LIST(NAME_S, NEW_NAME_LIST);
+	    end;
+
+
+	when DN_PRAGMA =>
+	    declare
+		USED_NAME_ID: TREE := D(AS_USED_NAME_ID, NODE);
+		GENERAL_ASSOC_S: TREE := D(AS_GENERAL_ASSOC_S, NODE);
+	    begin
+		WALK_PRAGMA(USED_NAME_ID, GENERAL_ASSOC_S, H);
+	    end;
+
+
+	when DN_SUBPROGRAM_BODY =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		FIRST_NAME: TREE := D(SM_FIRST, SOURCE_NAME);
+		BODY_NODE: TREE := D(AS_BODY, NODE);
+		FIRST_HEADER: TREE := CONST_VOID;
+		HEADER: TREE := D(AS_HEADER, NODE);
+
+		H: H_TYPE := WALK.H;
+		S: S_TYPE;
+		SOURCE_DEF: TREE;
+		PRIOR_DEF: TREE;
+	    begin
+		if KIND(SOURCE_NAME) = DN_OPERATOR_ID then
+		    FORCE_UPPER_CASE(SOURCE_NAME);
+		end if;
+		SOURCE_DEF := MAKE_DEF_FOR_ID(SOURCE_NAME,H);
+		D(SM_SPEC, SOURCE_NAME, HEADER);
+		D(SM_UNIT_DESC, SOURCE_NAME, CONST_VOID);
+		--D(XD_BODY, SOURCE_NAME, BODY_NODE);
+
+		if FIRST_NAME = SOURCE_NAME then
+		    PRIOR_DEF := GET_PRIOR_DEF(SOURCE_DEF);
+		    if PRIOR_DEF /= CONST_VOID
+		    and then KIND(D(XD_SOURCE_NAME,PRIOR_DEF)) = DN_GENERIC_ID
+		    then
+			FIRST_NAME := D(XD_SOURCE_NAME,PRIOR_DEF);
+			PRIOR_DEF := GET_DEF_FOR_ID(FIRST_NAME);
+		    else
+			PRIOR_DEF := SOURCE_DEF;
+		    end if;
+		else
+		    PRIOR_DEF := GET_DEF_FOR_ID(FIRST_NAME);
+		    -- library unit with existing subprogram spec
+		    -- $$$$ worry about killing prior body in this compilation
+		    D(XD_REGION_DEF, PRIOR_DEF, H.REGION_DEF);
+		end if;
+
+		if SOURCE_DEF /= PRIOR_DEF
+		and then D(SM_SPEC,D(XD_SOURCE_NAME,SOURCE_DEF))
+				= D(SM_SPEC,D(XD_SOURCE_NAME,PRIOR_DEF))
+		then
+		    -- (spec was generated in libphase; do not redo it)
+		    null;
+		else
+		    ENTER_REGION(SOURCE_DEF, H, S);
+		    --WALK_ITEM_S(D(AS_PARAM_S,HEADER), H);
+		    H.SUBP_SYMREP := D(LX_SYMREP, SOURCE_NAME);
+		    if SOURCE_DEF /= PRIOR_DEF
+                    and then KIND(FIRST_NAME) = DN_GENERIC_ID then
+			-- (spec is generic) - $$$$
+                        SWITCH_REGION(FIRST_NAME, SOURCE_DEF);
+  		        WALK_HEADER(HEADER, H);
+                        SWITCH_REGION(FIRST_NAME, PRIOR_DEF);
+                    else
+  		        WALK_HEADER(HEADER, H);
+		    end if;
+	            LEAVE_REGION(SOURCE_DEF, S);
+		    H := WALK.H;
+		end if;
+
+		if FIRST_NAME = SOURCE_NAME then
+		    -- (look for a subprogram declaration)
+		    MAKE_DEF_VISIBLE(SOURCE_DEF, HEADER);
+		    PRIOR_DEF := GET_PRIOR_HOMOGRAPH_DEF(SOURCE_DEF);
+		    if PRIOR_DEF /= CONST_VOID then
+			REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+			FIRST_NAME := D(XD_SOURCE_NAME, PRIOR_DEF);
+		    end if;
+		end if;
+		if PRIOR_DEF = CONST_VOID then
+		    MAKE_DEF_VISIBLE(SOURCE_DEF, HEADER);
+		    CHECK_EQUALITY_OPERATOR(SOURCE_NAME, H);
+		else
+		    if KIND(FIRST_NAME) in CLASS_SUBPROG_NAME
+		    or KIND(FIRST_NAME) = DN_GENERIC_ID then
+			FIRST_HEADER := D(SM_SPEC, FIRST_NAME);
+		    end if;
+		    if KIND(FIRST_HEADER) /= KIND(HEADER) then
+			if D(XD_HEADER, PRIOR_DEF) /= CONST_FALSE then
+			    ERROR(D(LX_SRCPOS,SOURCE_NAME)
+                                    , "Duplicate def for subprogram name - "
+				      &  PRINTNAME(D(LX_SYMREP,SOURCE_NAME)) );
+			end if;
+			MAKE_DEF_IN_ERROR(SOURCE_DEF);
+			FIRST_NAME := SOURCE_NAME;
+		    else
+			D(SM_FIRST, SOURCE_NAME, FIRST_NAME);
+		    end if;
+		end if;
+
+		if FIRST_NAME /= SOURCE_NAME then
+		    --D(XD_BODY, FIRST_NAME, BODY_NODE);
+		    D(SM_SPEC, SOURCE_NAME, D(SM_SPEC, FIRST_NAME));
+		    CONFORM_PARAMETER_LISTS
+				( D(AS_PARAM_S, D(SM_SPEC, FIRST_NAME))
+				, D(AS_PARAM_S, HEADER) );
+		    REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+		    SOURCE_DEF := PRIOR_DEF;
+		end if;
+
+		ENTER_BODY(SOURCE_DEF, H, S);
+		if KIND(FIRST_NAME) = DN_GENERIC_ID then
+		    MAKE_DEF_VISIBLE(SOURCE_DEF, D(SM_SPEC, FIRST_NAME));
+		end if;
+		if KIND(D(XD_HEADER,SOURCE_DEF)) = DN_FUNCTION_SPEC then
+		    H.RETURN_TYPE := GET_BASE_TYPE
+					(D(AS_NAME,D(XD_HEADER,SOURCE_DEF)));
+		end if;
+		WALK_UNIT_DESC(SOURCE_NAME, BODY_NODE, H);
+		if KIND(FIRST_NAME) = DN_GENERIC_ID then
+		    MAKE_DEF_VISIBLE(SOURCE_DEF);
+		end if;
+		LEAVE_BODY(SOURCE_DEF, S);
+	    end;
+
+
+	when DN_PACKAGE_BODY =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		BODY_NODE: TREE := D(AS_BODY, NODE);
+
+		FIRST_NAME: TREE;
+		H: H_TYPE := WALK.H;
+		S: S_TYPE;
+		SOURCE_DEF: TREE;
+	    begin
+		-- check for library unit with existing package spec
+		-- $$$$ worry about killing prior body in this compilation
+		FIRST_NAME := D(SM_FIRST, SOURCE_NAME);
+		if FIRST_NAME /= SOURCE_NAME then
+		    SOURCE_DEF := GET_DEF_FOR_ID(D(SM_FIRST, SOURCE_NAME));
+		    D(XD_REGION_DEF, SOURCE_DEF, H.REGION_DEF);
+		end if;
+
+		SOURCE_DEF := GET_DEF_IN_REGION(SOURCE_NAME, H);
+		if SOURCE_DEF = CONST_VOID then
+		    ERROR(D(LX_SRCPOS,NODE)
+                                , "No specification found for package - "
+				  & PRINTNAME(D(LX_SYMREP,SOURCE_NAME)) );
+		    SOURCE_DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+                    D(SM_SPEC, SOURCE_NAME, CONST_VOID); -- avoid crash
+		    MAKE_DEF_IN_ERROR(SOURCE_DEF);
+		else
+		    FIRST_NAME := D(XD_SOURCE_NAME, SOURCE_DEF);
+		    if KIND(FIRST_NAME) /= DN_PACKAGE_ID
+		    and then (KIND(FIRST_NAME) /= DN_GENERIC_ID
+			      or else KIND(D(SM_SPEC,FIRST_NAME))
+					/= DN_PACKAGE_SPEC)
+		    then
+			ERROR(D(LX_SRCPOS,NODE)
+                                    , "Duplicate name for package - "
+				      & PRINTNAME(D(LX_SYMREP,SOURCE_NAME)) );
+			SOURCE_DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+			MAKE_DEF_IN_ERROR(SOURCE_DEF);
+			FIRST_NAME := SOURCE_NAME;
+		    elsif D(XD_BODY, FIRST_NAME) /= CONST_VOID then
+			ERROR(D(LX_SRCPOS,NODE)
+                                    , "Duplicate body for package - "
+				      & PRINTNAME(D(LX_SYMREP,SOURCE_NAME)) );
+		    end if;
+		end if;
+
+		D(SM_FIRST, SOURCE_NAME, FIRST_NAME);
+		D(SM_SPEC, SOURCE_NAME, D(SM_SPEC, FIRST_NAME));
+		D(SM_UNIT_DESC, SOURCE_NAME, CONST_VOID);
+		D(XD_REGION, SOURCE_NAME, D(XD_REGION, FIRST_NAME));
+		if KIND(BODY_NODE) = DN_STUB then
+		    null;
+		    -- D(XD_STUB, SOURCE_NAME, SOURCE_NAME);
+		    -- D(XD_STUB, FIRST_NAME, SOURCE_NAME);
+		else
+		    -- D(XD_BODY, FIRST_NAME, NODE);
+		    -- D(XD_BODY, SOURCE_NAME, NODE);
+		    -- D(XD_STUB, SOURCE_NAME, D(XD_STUB, FIRST_NAME));
+		    ENTER_BODY(SOURCE_DEF, H, S);
+		    -- scan spec for use clauses
+		    declare
+			SPEC: TREE := D(SM_SPEC, SOURCE_NAME);
+		    begin
+			if SPEC /= CONST_VOID then
+			    REPROCESS_USE_CLAUSES(D(AS_DECL_S1,SPEC), H);
+			    REPROCESS_USE_CLAUSES(D(AS_DECL_S2,SPEC), H);
+			end if;
+		    end;
+		    WALK_UNIT_DESC(SOURCE_NAME, BODY_NODE, H);
+		    LEAVE_BODY(SOURCE_DEF, S);
+		end if;
+	    end;
+
+
+	when DN_TASK_BODY =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		BODY_NODE: TREE := D(AS_BODY, NODE);
+
+		H: H_TYPE := WALK.H;
+		S: S_TYPE;
+
+		SOURCE_DEF: TREE := MAKE_DEF_FOR_ID(SOURCE_NAME,H);
+		PRIOR_DEF: TREE;
+		PRIOR_NAME: TREE;
+		TASK_TYPE: TREE := CONST_VOID;
+	    begin
+
+		PRIOR_DEF := GET_PRIOR_DEF(SOURCE_DEF);
+		if PRIOR_DEF /= CONST_VOID then
+		    TASK_TYPE := GET_BASE_TYPE(D(XD_SOURCE_NAME,PRIOR_DEF));
+		end if;
+
+		D(SM_TYPE_SPEC, SOURCE_NAME, TASK_TYPE);
+		D(SM_BODY, SOURCE_NAME, BODY_NODE);
+		if KIND(TASK_TYPE) /= DN_TASK_SPEC then
+                    ERROR(D(LX_SRCPOS,NODE), "No task [type] declaration");
+		    MAKE_DEF_IN_ERROR(SOURCE_DEF);
+		    PRIOR_NAME := SOURCE_NAME;
+		    TASK_TYPE := CONST_VOID;
+		else
+		    REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+		    PRIOR_NAME := D(XD_SOURCE_NAME, PRIOR_DEF);
+		    D(SM_FIRST, SOURCE_NAME, PRIOR_NAME);
+		    if D(XD_BODY, TASK_TYPE) /= CONST_VOID
+		    or else (D(XD_STUB, TASK_TYPE) /= CONST_VOID
+				and then KIND(BODY_NODE) = DN_STUB)
+		    then
+			ERROR(D(LX_SRCPOS,SOURCE_NAME),
+                                    "Duplicate body or stub declaration");
+			TASK_TYPE := CONST_VOID;
+		    else
+			SOURCE_DEF := PRIOR_DEF;
+			--D(SM_BODY, TASK_TYPE, BODY_NODE);
+		    end if;
+		end if;
+
+		if KIND(BODY_NODE) /= DN_STUB then
+		    if TASK_TYPE /= CONST_VOID then
+			null;
+			-- D(XD_BODY, TASK_TYPE, BODY_NODE);
+		    end if;
+		else
+		    if TASK_TYPE /= CONST_VOID then
+			null;
+			-- D(XD_STUB, TASK_TYPE, SOURCE_NAME);
+		    end if;
+		end if;
+
+		ENTER_BODY(SOURCE_DEF, H, S);
+		WALK_UNIT_DESC(SOURCE_NAME, BODY_NODE, H);
+		LEAVE_BODY(SOURCE_DEF, S);
+	    end;
+
+	end case;
+
+        PUT(" ret "); PUT_LINE(NODE_REP(NODE));
+
+    end WALK;
+
+
+    procedure WALK_SOURCE_NAME_S(SOURCE_NAME_S: TREE; H: H_TYPE) is
+	SOURCE_NAME_LIST: SEQ_TYPE := LIST(SOURCE_NAME_S);
+	SOURCE_NAME: TREE;
+	DUMMY_DEF: TREE;
+    begin
+	while not IS_EMPTY(SOURCE_NAME_LIST) loop
+	    POP(SOURCE_NAME_LIST, SOURCE_NAME);
+	    DUMMY_DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+	end loop;
+    end WALK_SOURCE_NAME_S;
+
+
+    procedure WALK_HEADER(NODE: TREE; H: H_TYPE) is
+    begin
+
+        case CLASS_HEADER'(KIND(NODE)) is
+
+	when DN_PROCEDURE_SPEC =>
+	    declare
+		PARAM_S: TREE := D(AS_PARAM_S, NODE);
+	    begin
+		FINISH_PARAM_S(PARAM_S, H);
+	    end;
+
+
+	when DN_FUNCTION_SPEC =>
+	    declare
+		PARAM_S: TREE := D(AS_PARAM_S, NODE);
+		NAME: TREE := D(AS_NAME, NODE);
+		DUMMY: TREE;
+	    begin
+		if NAME /= CONST_VOID then -- might be instantiation
+		    DUMMY := EVAL_TYPE_MARK(NAME);
+		    NAME := RESOLVE_TYPE_MARK(NAME);
+		    D(AS_NAME, NODE, NAME);
+		end if;
+		FINISH_PARAM_S(PARAM_S, H);
+	    end;
+
+
+	when DN_ENTRY =>
+	    declare
+		PARAM_S: TREE := D(AS_PARAM_S, NODE);
+		DISCRETE_RANGE: TREE := D(AS_DISCRETE_RANGE, NODE);
+		TYPESET: TYPESET_TYPE;
+		TYPE_SPEC: TREE;
+	    begin
+		if DISCRETE_RANGE /= CONST_VOID then
+		    EVAL_NON_UNIVERSAL_DISCRETE_RANGE(DISCRETE_RANGE, TYPESET);
+		    REQUIRE_UNIQUE_TYPE(DISCRETE_RANGE,TYPESET);
+		    TYPE_SPEC := GET_THE_TYPE(TYPESET);
+		    if KIND(TYPE_SPEC) = DN_UNIVERSAL_INTEGER then
+			--$$$$ check for valid bound expressions
+			--$$$$ are we checking that it is discrete ?
+			TYPE_SPEC := PREDEFINED_INTEGER;
+		    end if;
+		    DISCRETE_RANGE
+			    := RESOLVE_DISCRETE_RANGE(DISCRETE_RANGE,TYPE_SPEC);
+		    D(AS_DISCRETE_RANGE, NODE, DISCRETE_RANGE);
+		else
+		    TYPE_SPEC := CONST_VOID;
+		end if;
+		FINISH_PARAM_S(PARAM_S, H);
+	    end;
+
+
+	when DN_PACKAGE_SPEC =>
+	    declare
+		DECL_S1:	constant TREE := D(AS_DECL_S1, NODE);
+		DECL_S2:	constant TREE := D(AS_DECL_S2, NODE);
+		H: H_TYPE := WALK_HEADER.H;
+	    begin
+		DB(XD_BODY_IS_REQUIRED, NODE, FALSE);
+		WALK_ITEM_S(DECL_S1, H);
+		H.IS_IN_SPEC := FALSE;
+		WALK_ITEM_S(DECL_S2, H);
+		DB(XD_BODY_IS_REQUIRED, NODE, TRUE); -- $$$$
+	    end;
+	end case;
+    end WALK_HEADER;
+
+
+    procedure SWITCH_REGION (GENERIC_ID, REGION_DEF: TREE) is
+        ITEM_LIST: SEQ_TYPE := LIST(D(SM_GENERIC_PARAM_S, GENERIC_ID));
+        ITEM: TREE;
+        NAME_LIST: SEQ_TYPE;
+        NAME: TREE;
+    begin
+        while not IS_EMPTY(ITEM_LIST) loop
+            POP (ITEM_LIST, ITEM);
+            case CLASS_ITEM'(KIND(ITEM)) is
+            when CLASS_DSCRMT_PARAM_DECL | CLASS_ID_S_DECL =>
+                NAME_LIST := LIST(D(AS_SOURCE_NAME_S, ITEM));
+                while not IS_EMPTY(NAME_LIST) loop
+                    POP(NAME_LIST, NAME);
+                    if KIND(D(LX_SYMREP,NAME)) = DN_SYMBOL_REP then
+                        D(XD_REGION_DEF
+                                , GET_DEF_FOR_ID(NAME)
+                                , REGION_DEF );
+                    end if; 
+                end loop;
+            when CLASS_ID_DECL =>
+                if KIND(D(LX_SYMREP,D(AS_SOURCE_NAME,ITEM)))
+                        = DN_SYMBOL_REP
+                then
+                    D(XD_REGION_DEF
+                            , GET_DEF_FOR_ID(D(AS_SOURCE_NAME, ITEM))
+                            , REGION_DEF );
+                end if;
+            when others =>
+                null;
+            end case;
+        end loop;
+    end;
+
+
+    procedure WALK_UNIT_DESC
+		( SOURCE_NAME:	TREE
+		; NODE: TREE
+		; H: H_TYPE
+		; HEADER: TREE := CONST_VOID )
+    is
+    begin
+
+	if NODE = CONST_VOID then
+	    return;
+	end if;
+
+        case CLASS_UNIT_DESC'(KIND(NODE)) is
+
+	when DN_RENAMES_UNIT | DN_NAME_DEFAULT =>
+	    declare
+		NAME: TREE := D(AS_NAME, NODE);
+	    begin
+		if KIND(SOURCE_NAME) = DN_PACKAGE_ID then
+		    NAME := WALK_NAME(DN_PACKAGE_ID, NAME);
+		else
+		    NAME := WALK_HOMOGRAPH_UNIT
+			    ( NAME
+			    , HEADER );
+		end if;
+		D(AS_NAME, NODE, NAME);
+	    end;
+
+
+	when DN_INSTANTIATION =>
+	    INSTANT.WALK_INSTANTIATION(SOURCE_NAME, NODE, H);
+
+
+	when DN_BOX_DEFAULT | DN_NO_DEFAULT =>
+	    null;
+
+
+	when DN_BLOCK_BODY =>
+	    -- $$$$ note - block statement treated separately
+            -- ... but it doesn't have to be
+	    declare
+		ITEM_S: TREE := D(AS_ITEM_S, NODE);
+		STM_S: TREE := D(AS_STM_S, NODE);
+		ALTERNATIVE_S: TREE := D(AS_ALTERNATIVE_S, NODE);
+		ALTERNATIVE_LIST: SEQ_TYPE;
+		ALTERNATIVE: TREE;
+	    begin
+		WALK_ITEM_S(ITEM_S, H);
+		if STM_S /= CONST_VOID then
+		    DECLARE_LABEL_BLOCK_LOOP_IDS(STM_S, H);
+		end if;
+		if ALTERNATIVE_S /= CONST_VOID then
+		    ALTERNATIVE_LIST := LIST(ALTERNATIVE_S);
+		    while not IS_EMPTY(ALTERNATIVE_LIST) loop
+			POP(ALTERNATIVE_LIST, ALTERNATIVE);
+			if KIND(ALTERNATIVE) = DN_ALTERNATIVE then
+			    DECLARE_LABEL_BLOCK_LOOP_IDS
+					(D(AS_STM_S,ALTERNATIVE) ,H);
+			end if;
+		    end loop;
+		end if;
+		if STM_S /= CONST_VOID then
+		    WALK_STM_S(STM_S, H);
+		end if;
+		WALK_ALTERNATIVE_S(ALTERNATIVE_S, H);
+	    end;
+
+
+	when DN_STUB =>
+	    declare
+	    begin
+		null;
+	    end;
+
+
+	when DN_IMPLICIT_NOT_EQ | DN_DERIVED_SUBPROG =>
+            QUIT("Walk_Unit_Desc: Invalid node");
+
+	end case;
+    end WALK_UNIT_DESC;
+
+
+    procedure ENTER_REGION(DEF: TREE; H: in out H_TYPE; S: out S_TYPE) is
+    begin
+	S.SB := SB;
+	S.SU := SU;
+	H.REGION_DEF := DEF;
+	H.LEX_LEVEL := H.LEX_LEVEL + 1;
+	DI(XD_LEX_LEVEL, DEF, H.LEX_LEVEL);
+	H.IS_IN_SPEC := TRUE;
+	H.IS_IN_BODY := FALSE;
+	H.RETURN_TYPE := CONST_VOID;
+	SU.USED_PACKAGE_LIST := MAKE;
+    end ENTER_REGION;
+
+    procedure LEAVE_REGION(DEF: TREE; S: S_TYPE) is
+	PACKAGE_DEF: TREE;
+    begin
+	DI(XD_LEX_LEVEL, DEF, 0);
+	while not IS_EMPTY(SU.USED_PACKAGE_LIST) loop
+	    POP(SU.USED_PACKAGE_LIST, PACKAGE_DEF);
+	    DB(XD_IS_USED, PACKAGE_DEF, FALSE);
+	end loop;
+	SB := S.SB;
+	SU := S.SU;
+    end LEAVE_REGION;
+
+    procedure ENTER_BODY(DEF: TREE; H: in out H_TYPE; S: out S_TYPE) is
+    begin
+	ENTER_REGION(DEF, H, S);
+	H.IS_IN_SPEC := FALSE;
+	H.IS_IN_BODY := TRUE;
+	if KIND(D(XD_SOURCE_NAME, DEF)) = DN_GENERIC_ID
+	and then D(XD_HEADER, DEF) /= CONST_FALSE then
+	    MAKE_DEF_VISIBLE(DEF, D(SM_SPEC,D(XD_SOURCE_NAME,DEF)));
+	end if;
+    end ENTER_BODY;
+
+    procedure LEAVE_BODY(DEF: TREE; S: S_TYPE) is
+    begin
+	LEAVE_REGION(DEF, S);
+	if KIND(D(XD_SOURCE_NAME, DEF)) = DN_GENERIC_ID
+	and then D(XD_HEADER, DEF) /= CONST_FALSE then
+	    MAKE_DEF_VISIBLE(DEF);
+	end if;
+    end LEAVE_BODY;
+
+
+    procedure INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S
+		( SOURCE_NAME_S:	TREE
+		; OBJ_TYPE:		TREE
+		; INIT_EXP:		TREE := CONST_VOID )
+    is
+	SOURCE_NAME_LIST:	SEQ_TYPE := LIST(SOURCE_NAME_S);
+	SOURCE_NAME:		TREE;
+	SOURCE_DEF:		TREE;
+	PRIOR_NAME:		TREE;
+	PRIOR_DEF:		TREE;
+
+	TEMP_OBJ_TYPE:		TREE := OBJ_TYPE;
+	TEMP_INIT_EXP:		TREE := INIT_EXP;
+    begin
+	while not IS_EMPTY(SOURCE_NAME_LIST) loop
+	    POP(SOURCE_NAME_LIST, SOURCE_NAME);
+	    SOURCE_DEF := GET_DEF_FOR_ID(SOURCE_NAME);
+	    MAKE_DEF_VISIBLE(SOURCE_DEF);
+	    PRIOR_DEF := GET_PRIOR_DEF(SOURCE_DEF);
+	    D(SM_OBJ_TYPE, SOURCE_NAME, TEMP_OBJ_TYPE);
+	    if TEMP_INIT_EXP /= CONST_VOID then
+		D(SM_INIT_EXP, SOURCE_NAME, TEMP_INIT_EXP);
+	    end if;
+
+	    if OBJ_TYPE = CONST_VOID then
+		MAKE_DEF_IN_ERROR(SOURCE_DEF);
+	    elsif PRIOR_DEF /= CONST_VOID then
+		if KIND(SOURCE_NAME) = DN_CONSTANT_ID then
+		    PRIOR_NAME := D(XD_SOURCE_NAME, PRIOR_DEF);
+		    if KIND(PRIOR_NAME) = DN_CONSTANT_ID
+		    and then D(SM_INIT_EXP,PRIOR_NAME) = CONST_VOID
+		    and then GET_BASE_TYPE(D(SM_OBJ_TYPE,PRIOR_NAME))
+				= GET_BASE_TYPE(TEMP_OBJ_TYPE)
+		    then
+			REMOVE_DEF_FROM_ENVIRONMENT(SOURCE_DEF);
+			D(SM_FIRST, SOURCE_NAME, PRIOR_NAME);
+			-- (Leave type private)
+			--D(SM_OBJ_TYPE, PRIOR_NAME, TEMP_OBJ_TYPE);
+			D(SM_INIT_EXP, PRIOR_NAME, TEMP_INIT_EXP);
+		    else
+			ERROR(D(LX_SRCPOS,SOURCE_NAME)
+                                    , "Duplicate declaration of constant - "
+				      & PRINTNAME(D(LX_SYMREP,SOURCE_NAME)) );
+			MAKE_DEF_IN_ERROR(SOURCE_DEF);
+		    end if;
+		else
+		    ERROR(D(LX_SRCPOS,SOURCE_NAME)
+                                , "Duplicate declaration - "
+				  & PRINTNAME(D(LX_SYMREP,SOURCE_NAME)) );
+		    MAKE_DEF_IN_ERROR(SOURCE_DEF);
+		end if;
+	    else
+		MAKE_DEF_VISIBLE(SOURCE_DEF);
+	    end if;
+
+	end loop;
+    end INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S;
+
+
+    procedure FINISH_PARAM_S(DECL_S: TREE; H: H_TYPE) is
+	DECL_LIST:	SEQ_TYPE := LIST(DECL_S);
+	DECL:		TREE;
+    begin
+	while not IS_EMPTY(DECL_LIST) loop
+	    POP(DECL_LIST, DECL);
+            WALK(DECL, H);
+	    FINISH_PARAM_DECL(DECL, H);
+	end loop;
+    end FINISH_PARAM_S;
+
+
+    procedure FINISH_PARAM_DECL(NODE: TREE; H: H_TYPE) is
+	SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+	EXP: TREE := D(AS_EXP, NODE);
+	NAME: TREE := D(AS_NAME, NODE);
+
+	TYPE_SPEC: TREE;
+	TYPESET: TYPESET_TYPE;
+    begin
+	TYPE_SPEC := EVAL_TYPE_MARK(NAME);
+	NAME := RESOLVE_TYPE_MARK(NAME);
+	D(AS_NAME, NODE, NAME);
+
+	if EXP /= CONST_VOID then
+	    EVAL_EXP_TYPES(EXP, TYPESET);
+	    REQUIRE_TYPE(GET_BASE_TYPE(TYPE_SPEC), EXP, TYPESET);
+	    --(Note. type may be limited.)
+	    --REQUIRE_NONLIMITED_TYPE(EXP, TYPESET);
+	    EXP := RESOLVE_EXP(EXP, TYPESET);
+	end if;
+
+	-- get subtype for object
+	if TYPE_SPEC /= CONST_VOID then
+	    TYPE_SPEC := D(SM_TYPE_SPEC, GET_NAME_DEFN(NAME));
+	end if;
+
+	INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S(SOURCE_NAME_S
+			, OBJ_TYPE => TYPE_SPEC
+			, INIT_EXP => EXP);
+    end FINISH_PARAM_DECL;
+
+
+    procedure FINISH_VARIABLE_DECL(NODE: TREE; H: H_TYPE) is
+	SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+	EXP: TREE := D(AS_EXP, NODE);
+	TYPE_DEF: TREE := D(AS_TYPE_DEF, NODE);
+
+	TYPE_SPEC: TREE;
+	TYPESET: TYPESET_TYPE;
+    begin
+	TYPE_SPEC := EVAL_SUBTYPE_INDICATION(TYPE_DEF);
+	RESOLVE_SUBTYPE_INDICATION(TYPE_DEF, TYPE_SPEC);
+	D(AS_TYPE_DEF, NODE, TYPE_DEF);
+
+	if EXP /= CONST_VOID then
+	    if not IS_NONLIMITED_TYPE(TYPE_SPEC) then
+                ERROR(D(LX_SRCPOS, TYPE_DEF), "Initial value for limited type");
+		TYPE_SPEC := CONST_VOID;
+	    end if;
+
+	    EVAL_EXP_TYPES(EXP, TYPESET);
+	    REQUIRE_TYPE(GET_BASE_TYPE(TYPE_SPEC), EXP, TYPESET);
+	    EXP := RESOLVE_EXP(EXP, TYPESET);
+	end if;
+
+	INSERT_OBJ_TYPE_AND_INIT_EXP_IN_S(SOURCE_NAME_S
+			, OBJ_TYPE => TYPE_SPEC
+			, INIT_EXP => EXP);
+    end FINISH_VARIABLE_DECL;
+
+
+    function WALK_EXP_MUST_BE_NAME(NAME: TREE) return TREE is
+	NAME_KIND: NODE_NAME := KIND(NAME);
+	DEFSET: DEFSET_TYPE;
+    begin
+	if NAME_KIND = DN_USED_OBJECT_ID
+	or NAME_KIND = DN_SELECTED then
+	    FIND_VISIBILITY(NAME, DEFSET);
+	    REQUIRE_UNIQUE_DEF(NAME, DEFSET);
+	    return RESOLVE_NAME(NAME, GET_THE_ID(DEFSET));
+	else
+            ERROR(D(LX_SRCPOS, NAME), "Name required");
+	    return WALK_ERRONEOUS_EXP(NAME);
+	end if;
+    end WALK_EXP_MUST_BE_NAME;
+
+
+    function WALK_NAME(ID_KIND: NODE_NAME; NAME: TREE) return TREE is
+	NEW_NAME: constant TREE := WALK_EXP_MUST_BE_NAME(NAME);
+	NAME_DEFN: TREE := GET_NAME_DEFN(NEW_NAME);
+    begin
+
+	if NAME_DEFN = CONST_VOID or else KIND(NAME_DEFN) = ID_KIND then
+            null;
+        elsif id_kind = dn_package_id
+        and then kind(name_defn) = dn_generic_id
+        and then kind(d(sm_spec,name_defn)) = dn_package_spec
+        and then di(xd_lex_level,get_def_for_id(name_defn)) > 0
+        then
+            null;
+        else
+            ERROR(D(LX_SRCPOS, NAME), "Name must be " & NODE_IMAGE(ID_KIND));
+	    -- added wbe 9/21/90
+	    -- clear defn if wrong kind
+	    if KIND(NEW_NAME) = DN_SELECTED then
+		D(SM_DEFN, D(AS_DESIGNATOR, NEW_NAME), CONST_VOID);
+	    else
+		D(SM_DEFN, NEW_NAME, CONST_VOID);
+	    end if;
+	end if;
+
+	return NEW_NAME;
+    end WALK_NAME;
+
+
+    function WALK_TYPE_MARK(NAME: TREE) return TREE is
+	NEW_NAME: constant TREE := WALK_EXP_MUST_BE_NAME(NAME);
+	NAME_DEFN: TREE := GET_NAME_DEFN(NEW_NAME);
+    begin
+
+	if KIND(NAME_DEFN) not in CLASS_TYPE_NAME
+	and then NAME_DEFN /= CONST_VOID then
+            ERROR(D(LX_SRCPOS, NAME), "Type mark required");
+	end if;
+
+	return NEW_NAME;
+    end WALK_TYPE_MARK;
+
+
+    procedure WALK_DISCRETE_CHOICE_S(CHOICE_S: TREE; TYPE_SPEC: TREE) is
+	CHOICE_LIST:	SEQ_TYPE := LIST(CHOICE_S);
+	CHOICE: 	TREE;
+
+	NEW_CHOICE_LIST: SEQ_TYPE := MAKE;
+	EXP:		TREE;
+	TYPESET:	TYPESET_TYPE;
+	IS_SUBTYPE:	BOOLEAN;
+    begin
+	while not IS_EMPTY(CHOICE_LIST) loop
+	    POP(CHOICE_LIST, CHOICE);
+
+            case CLASS_CHOICE'(KIND(CHOICE)) is
+	    when DN_CHOICE_EXP =>
+		EXP := D(AS_EXP, CHOICE);
+		EVAL_EXP_SUBTYPE_TYPES(EXP, TYPESET, IS_SUBTYPE);
+		REQUIRE_TYPE(TYPE_SPEC, EXP, TYPESET);
+		if not IS_SUBTYPE then
+		    EXP := RESOLVE_EXP(EXP, GET_THE_TYPE(TYPESET));
+		    D(AS_EXP, CHOICE, EXP);
+		else
+		    EXP := RESOLVE_DISCRETE_RANGE(EXP, GET_THE_TYPE(TYPESET));
+		    CHOICE := MAKE_CHOICE_RANGE
+				( LX_SRCPOS => D(LX_SRCPOS, CHOICE)
+				, AS_DISCRETE_RANGE => EXP );
+
+		end if;
+	    when DN_CHOICE_RANGE =>
+		EXP := D(AS_DISCRETE_RANGE, CHOICE);
+		EVAL_DISCRETE_RANGE(EXP, TYPESET);
+		REQUIRE_TYPE(TYPE_SPEC, EXP, TYPESET);
+		EXP := RESOLVE_DISCRETE_RANGE(EXP, GET_THE_TYPE(TYPESET));
+		D(AS_DISCRETE_RANGE, CHOICE, EXP);
+
+	    when DN_CHOICE_OTHERS =>
+		null;
+	    end case;
+
+	    NEW_CHOICE_LIST := APPEND(NEW_CHOICE_LIST, CHOICE);
+	end loop;
+	LIST(CHOICE_S, NEW_CHOICE_LIST);
+    end WALK_DISCRETE_CHOICE_S;
+
+
+    procedure WALK_ITEM_S (ITEM_S: TREE; H: H_TYPE) is
+	ITEM_LIST: SEQ_TYPE := LIST(ITEM_S);
+	ITEM: TREE;
+    begin
+	while not IS_EMPTY(ITEM_LIST) loop
+	    POP(ITEM_LIST, ITEM);
+	    WALK(ITEM,H);
+	end loop;
+    end WALK_ITEM_S;
+
+
+    function IS_CONSTANT_EXP (EXP: TREE) return BOOLEAN is
+	-- returns True if Exp is a name of a constant
+	-- (for purposes of renames)
+    begin
+	if KIND(EXP) = DN_SELECTED then
+	    return IS_CONSTANT_EXP(D(AS_DESIGNATOR, EXP));
+	elsif KIND(EXP) = DN_USED_OBJECT_ID then
+	    return KIND(D(SM_DEFN,EXP)) = DN_CONSTANT_ID;
+	else
+	    return FALSE;
+	end if;
+    end IS_CONSTANT_EXP;
+
+
+    procedure REPROCESS_USE_CLAUSES(DECL_S: TREE; H: H_TYPE) is
+	-- reprocesses use clauses in a package decl for visibility in body
+	DECL_LIST: SEQ_TYPE;
+	DECL: TREE;
+	ITEM_LIST: SEQ_TYPE;
+	ITEM: TREE;
+	ITEM_DEFN: TREE;
+	ITEM_DEF: TREE;
+    begin
+	if DECL_S = CONST_VOID then
+	    return;
+	end if;
+
+	DECL_LIST := LIST(DECL_S);
+	while not IS_EMPTY(DECL_LIST) loop
+	    POP(DECL_LIST, DECL);
+	    if KIND(DECL) = DN_USE then
+		ITEM_LIST := LIST(D(AS_NAME_S, DECL));
+		while not IS_EMPTY(ITEM_LIST) loop
+		    POP(ITEM_LIST, ITEM);
+		    if KIND(ITEM) = DN_SELECTED then
+			ITEM := D(AS_DESIGNATOR, ITEM);
+		    end if;
+		    if KIND(ITEM) = DN_USED_NAME_ID then
+			ITEM_DEFN := D(SM_DEFN, ITEM);
+		    else
+			ITEM_DEFN := CONST_VOID;
+		    end if;
+		    if KIND(ITEM_DEFN) = DN_PACKAGE_ID then
+			ITEM_DEF := GET_DEF_FOR_ID(ITEM_DEFN);
+			if DI(XD_LEX_LEVEL, ITEM_DEF) <= 0
+			and then not DB(XD_IS_USED, ITEM_DEF) then
+			    DB(XD_IS_USED, ITEM_DEF, TRUE);
+			    SU.USED_PACKAGE_LIST
+				    := INSERT(SU.USED_PACKAGE_LIST,ITEM_DEF);
+			end if;
+		    end if;
+		end loop;
+	    elsif KIND(DECL) = DN_TYPE_DECL
+	    and then ( KIND(D(AS_TYPE_DEF, DECL)) = DN_RECORD_DEF
+		    or else KIND(D(AS_TYPE_DEF, DECL))
+			    in DN_CONSTRAINED_ARRAY_DEF
+				    .. DN_UNCONSTRAINED_ARRAY_DEF )
+	    then
+		PREFCNS.GEN_PREDEFINED_OPERATORS
+			(D(SM_TYPE_SPEC,D(AS_SOURCE_NAME,DECL)), H);
+	    elsif KIND(DECL) in CLASS_OBJECT_DECL
+	    and then KIND(D(AS_TYPE_DEF,DECL)) = DN_CONSTRAINED_ARRAY_DEF then
+		declare
+		    ID_LIST: SEQ_TYPE := LIST(D(AS_SOURCE_NAME_S,DECL));
+		    ID: TREE;
+		begin
+		    while not IS_EMPTY(ID_LIST) loop
+			POP(ID_LIST, ID);
+			PREFCNS.GEN_PREDEFINED_OPERATORS(D(SM_OBJ_TYPE,ID), H);
+		    end loop;
+		end;
+	    end if;
+	end loop;
+    end REPROCESS_USE_CLAUSES;
+
+
+    procedure FIXUP_CONSTRAINED_ARRAY_OBJECTS(SOURCE_NAME_S: TREE; H: H_TYPE) is
+        -- make distinct copies of array type_spec's
+	-- ... and generate predefined operators
+	SOURCE_NAME_LIST: SEQ_TYPE := LIST(SOURCE_NAME_S);
+	SOURCE_NAME: TREE;
+	OBJ_TYPE: TREE;
+	EXP: TREE;
+	CONSTRAINED_SPEC: TREE;
+	UNCONSTRAINED_SPEC: TREE;
+    begin
+
+	-- get original object type and initialization expression
+	POP(SOURCE_NAME_LIST, SOURCE_NAME);
+	OBJ_TYPE := D(SM_OBJ_TYPE, SOURCE_NAME);
+	EXP := D(SM_INIT_EXP, SOURCE_NAME);
+
+	-- make predefined operators for first object type
+	PREFCNS.GEN_PREDEFINED_OPERATORS
+		( GET_BASE_TYPE(OBJ_TYPE)
+		, H );
+
+	-- for each source name except the first
+	while not IS_EMPTY(SOURCE_NAME_LIST) loop
+	    POP(SOURCE_NAME_LIST, SOURCE_NAME);
+
+	    -- make copies of type and subtype spec
+	    CONSTRAINED_SPEC := COPY_NODE(OBJ_TYPE);
+	    UNCONSTRAINED_SPEC
+		    := COPY_NODE
+			    (D(SM_BASE_TYPE, CONSTRAINED_SPEC));
+	    D(XD_SOURCE_NAME, CONSTRAINED_SPEC, SOURCE_NAME);
+	    D(XD_SOURCE_NAME, UNCONSTRAINED_SPEC, SOURCE_NAME);
+	    D(SM_BASE_TYPE
+			, UNCONSTRAINED_SPEC
+			, UNCONSTRAINED_SPEC );
+	    D(SM_BASE_TYPE
+			, CONSTRAINED_SPEC
+			, UNCONSTRAINED_SPEC );
+
+	    -- generate predefined operators for created type
+	    PREFCNS.GEN_PREDEFINED_OPERATORS
+		( GET_BASE_TYPE(UNCONSTRAINED_SPEC)
+		, H );
+
+	    -- if an initialization expression was given
+	    if EXP /= CONST_VOID then
+
+		-- make a copy of it with the new type
+		EXP := COPY_NODE(EXP);
+		D(SM_EXP_TYPE, EXP, CONSTRAINED_SPEC);
+		D(SM_INIT_EXP, SOURCE_NAME, EXP);
+	    end if;
+	end loop;
+    end FIXUP_CONSTRAINED_ARRAY_OBJECTS;
+
+
+    procedure CHECK_EQUALITY_OPERATOR(OPERATOR_ID: TREE; H: H_TYPE) is
+	SYMREP: TREE;
+	NEW_ID: TREE;
+    begin
+	if KIND(OPERATOR_ID) /= DN_OPERATOR_ID then
+	    return;
+	end if;
+
+	if EQUAL_SYM = CONST_VOID then
+            EQUAL_SYM := STORESYM("""=""");
+            NOT_EQUAL_SYM := STORESYM("""/=""");
+	end if;
+
+	SYMREP := D(LX_SYMREP, OPERATOR_ID);
+	if SYMREP = NOT_EQUAL_SYM then
+            ERROR(D(LX_SRCPOS,OPERATOR_ID), "Definition of ""/="" operator");
+	end if;
+
+	if SYMREP = EQUAL_SYM then
+	    NEW_ID := COPY_NODE(OPERATOR_ID);
+	    -- set sm_first to the created id
+	    D(SM_FIRST, NEW_ID, NEW_ID);
+	    D(LX_SYMREP, NEW_ID, NOT_EQUAL_SYM);
+	    D(SM_UNIT_DESC
+		    , NEW_ID
+		    ,  MAKE_IMPLICIT_NOT_EQ
+				(SM_EQUAL => OPERATOR_ID) );
+	    MAKE_DEF_VISIBLE
+		    ( MAKE_DEF_FOR_ID(NEW_ID, H)
+		    , D(XD_HEADER, GET_DEF_FOR_ID(OPERATOR_ID)) );
+	    D(XD_NOT_EQUAL
+		    , OPERATOR_ID
+		    , NEW_ID );
+            -- construct new formal parameter id's
+	    declare
+		SPEC: TREE := COPY_NODE(D(SM_SPEC, NEW_ID));
+		PARAM_S: TREE := COPY_NODE(D(AS_PARAM_S, SPEC));
+		PARAM_LIST: SEQ_TYPE := LIST(PARAM_S);
+		PARAM: TREE;
+		ID_S: TREE;
+		ID_LIST: SEQ_TYPE;
+		ID: TREE;
+		NEW_ID_LIST: SEQ_TYPE;
+		NEW_PARAM_LIST: SEQ_TYPE := MAKE;
+	    begin
+		while not IS_EMPTY(PARAM_LIST) loop
+		    POP(PARAM_LIST, PARAM);
+		    PARAM := COPY_NODE(PARAM);
+		    ID_S := COPY_NODE(D(AS_SOURCE_NAME_S, PARAM));
+		    ID_LIST := LIST(ID_S);
+		    NEW_ID_LIST := MAKE;
+		    while not IS_EMPTY(ID_LIST) loop
+			POP(ID_LIST, ID);
+			ID := COPY_NODE(ID);
+			D(SM_FIRST, ID, ID);
+			NEW_ID_LIST := APPEND(NEW_ID_LIST, ID);
+		    end loop;
+		    LIST(ID_S, NEW_ID_LIST);
+		    D(AS_SOURCE_NAME_S, PARAM, ID_S);
+		    NEW_PARAM_LIST := APPEND(NEW_PARAM_LIST, PARAM);
+		end loop;
+		LIST(PARAM_S, NEW_PARAM_LIST);
+		D(AS_PARAM_S, SPEC, PARAM_S);
+		D(SM_SPEC, NEW_ID, SPEC);
+	    end;
+	end if;
+    end CHECK_EQUALITY_OPERATOR;
+
+end NODWALK;

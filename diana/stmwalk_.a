@@ -1,0 +1,11 @@
+with USERPK; use USERPK;
+with SEMGLOB; use SEMGLOB;
+
+package STMWALK is
+
+    procedure DECLARE_LABEL_BLOCK_LOOP_IDS(STM_S: TREE; H: H_TYPE);
+    procedure WALK_STM_S(STM_S: TREE; H: H_TYPE);
+    procedure WALK_ALTERNATIVE_S(ALTERNATIVE_S: TREE; H: H_TYPE);
+    function WALK_STM (STM_IN: TREE; H: H_TYPE) return TREE;
+
+end STMWALK;

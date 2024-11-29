@@ -1,0 +1,634 @@
+with TEXT2_IO, USERPK, LSCAN, LTYPE;
+use  TEXT2_IO, USERPK, LSCAN, LTYPE;
+procedure UGLY is
+
+  -- "Ugly-Printer" -- reads indented program and makes 'end' clauses right
+  -- Also makes reserved words lower case and identifiers upper case
+  -- Also finds some common syntactic errors
+  -- Reads file named in command; produces $$$.TMP
+  -- Errors marked in the latter with "==>" at start of line
+
+  use ASCII;
+  IFILE:	FILE_TYPE;
+  OFILE:	FILE_TYPE;
+  FNAME:	PNAME;
+  ICOUNT:	INTEGER := 0;
+  OCOUNT:	INTEGER := 0;
+  SLINE:	LINE;
+  LAST: 	NATURAL;
+  COL:		NATURAL;
+  F_COL:	NATURAL;
+  L_TYPE:	LEXTYPE := LT_END_MARK;
+  PRIOR_TYPE:	LEXTYPE := LT_SEMICOLON;
+  L_TEXT:	PNAME;
+  PAREN_COUNT:	INTEGER := 0;
+  ERR_MSG:	PNAME;
+  IS_ERROR:	BOOLEAN := FALSE;
+  CUR_COND:	BOOLEAN := FALSE;
+  CUR_INDENT:	NATURAL;
+  CASE_MAGIC:   constant := CHARACTER'POS('a') - CHARACTER'POS('A');
+  subtype LCASE is CHARACTER range 'a' .. 'z';
+  subtype UCASE is CHARACTER range 'A' .. 'Z';
+
+  procedure ERR (MSG: STRING := "");
+  procedure WRITE_ERROR;
+  procedure READ_LINE;
+  procedure READ_LINE_NO_CONTEXT;
+  procedure GET_TOKEN;
+  procedure CLEAR_PAREN;
+  function IS_STA_CONTEXT return BOOLEAN;
+  procedure CHECK_STA_CONTEXT;
+  procedure FIX;
+  procedure FIX_AND_WRITE;
+  procedure WRITE_LINE;
+  procedure WRITE_END(ITEM: STRING; INDENT: NATURAL; COND: BOOLEAN);
+  procedure COPY_STUFF;
+  procedure COPY_SUBPROGRAM;
+  procedure COPY_PACKAGE;
+  procedure COPY_DECLARE;
+  procedure COPY_BEGIN;
+  procedure COPY_IF;
+  procedure COPY_CASE;
+  procedure COPY_LOOP;
+  procedure COPY_RECORD;
+  procedure COPY_EXIT;
+  procedure COPY_ASSIGNMENT_ETC;
+  procedure COPY_MISC;
+  procedure COPY_AND_OR;
+  procedure COPY_BLOCK (ITEM: STRING; INDENT: NATURAL; COND: BOOLEAN);
+  procedure COPY_EXCEPTION;
+
+  procedure ERR (MSG: STRING := "") is
+    -- Remember an error message; print one if there are two
+    -- (two blank messages (syntax errors on line) are combined
+  begin
+    if IS_ERROR then
+      if LENGTH(ERR_MSG) = 0 and then MSG /= "" then
+	WRITE_ERROR;
+      elsif LENGTH(ERR_MSG) = 0 then
+	WRITE_ERROR;
+	SET(ERR_MSG, TO => MSG);
+      end if;
+    else
+      IS_ERROR := TRUE;
+      SET(ERR_MSG, TO => MSG);
+    end if;
+  end ERR;
+
+  procedure WRITE_ERROR is
+  begin
+    if IS_ERROR then
+      IS_ERROR := FALSE;
+      PUT(ICOUNT); PUT(": ");
+      PUT(OFILE,"==> ");
+      if LENGTH(ERR_MSG) = 0 then
+	PUT_LINE(SLINE.BDY(1 .. SLINE.LEN));
+	NEW_LINE(OFILE);
+      else
+	PUT_LINE(TO_STRING(ERR_MSG));
+	PUT_LINE(OFILE,TO_STRING(ERR_MSG));
+      end if;
+    end if;
+  end WRITE_ERROR;
+
+  procedure READ_LINE is
+  begin
+    if IS_STA_CONTEXT then
+      CLEAR_PAREN;
+    end if;
+    READ_LINE_NO_CONTEXT;
+  end READ_LINE;
+
+  procedure READ_LINE_NO_CONTEXT is
+    -- note - called directly to avoid ';' check in function/procedure spec
+  begin
+    loop
+      -- Loops until eof or line with something on it
+      WRITE_ERROR;
+      CUR_COND := FALSE;
+      if END_OF_FILE (IFILE) then
+	CUR_INDENT := 0;
+        SLINE.LEN := 0;
+--@	PUT_LINE("---*EOF*");
+	exit;
+      else
+	-- Do the actual read
+	if END_OF_LINE(IFILE) then
+	  -- Janus has grief reading an empty line
+	  SKIP_LINE (IFILE);
+	  LAST := 0;
+	else
+	  GET_LINE (IFILE, SLINE.BDY, LAST);
+	end if;
+	ICOUNT := ICOUNT + 1;
+	SLINE.LEN := LAST;
+--@	PUT("---"); PUT_LINE(SLINE.BDY(1 .. LAST));
+	if LAST = 0 then
+	  -- Empty line
+	  WRITE_LINE;
+        elsif SLINE.BDY(1) = ASCII.SUB
+        or else SLINE.BDY(1 .. 2) = "==" then
+	  -- Ignore error line (beginning with "==")
+	  null;
+	else
+	  COL := 0;
+          if LAST > 0 and then SLINE.BDY(1) = '@' then
+            -- '@' in first col indicates conditional compilation (Janus)
+	    CUR_COND := TRUE;
+	    COL := 1;
+	  end if;
+	  GET_TOKEN;
+	  if L_TYPE = LT_END_MARK then
+	    -- Empty line
+	    WRITE_LINE;
+	  else
+	    -- calculate indent, allowing for tabs
+	    CUR_INDENT := 1;
+	    for I in 1 .. F_COL - 1 loop
+	      if SLINE.BDY(I) = HT then
+		CUR_INDENT := ((CUR_INDENT+7)/8)*8;
+	      end if;
+	      CUR_INDENT := CUR_INDENT + 1;
+	    end loop;
+	    exit;
+	  end if;
+	end if;
+      end if;
+    end loop;
+  end READ_LINE_NO_CONTEXT;
+
+  procedure GET_TOKEN is
+  begin
+    if L_TYPE /= LT_END_MARK then
+      PRIOR_TYPE := L_TYPE;
+    end if;
+    LEX_SCAN(SLINE, COL, F_COL, L_TYPE, L_TEXT);
+    if L_TYPE = LT_IDENTIFIER then
+      for I in F_COL .. COL loop
+	if SLINE.BDY(I) in LCASE then
+          SLINE.BDY(I)
+		   := CHARACTER'VAL(CHARACTER'POS(SLINE.BDY(I)) - CASE_MAGIC);
+	end if;
+      end loop;
+      if IS_EQUAL(L_TEXT, "END_IF") or else IS_EQUAL(L_TEXT, "END_LOOP")
+      or else IS_EQUAL(L_TEXT, "END_CASE") then
+	IS_ERROR := TRUE;
+      end if;
+    elsif L_TYPE in LT_RESERVED then
+      for I in F_COL .. COL loop
+	if SLINE.BDY(I) in UCASE then
+          SLINE.BDY(I)
+	 	   := CHARACTER'VAL(CHARACTER'POS(SLINE.BDY(I)) + CASE_MAGIC);
+	end if;
+      end loop;
+    elsif L_TYPE = LT_ERROR then
+      ERR;
+    elsif L_TYPE = LT_LEFT_PAREN then
+      PAREN_COUNT := PAREN_COUNT + 1;
+    elsif L_TYPE = LT_RIGHT_PAREN then
+      PAREN_COUNT := PAREN_COUNT - 1;
+      if PAREN_COUNT < 0 then
+	ERR("Unmatched right parenthesis");
+      end if;
+    end if;
+  end GET_TOKEN;
+
+  procedure CLEAR_PAREN is
+  begin
+    if PAREN_COUNT > 0 then
+      ERR("Unmatched left parenthes(e)s");
+    end if;
+    PAREN_COUNT := 0;
+  end CLEAR_PAREN;
+
+  function IS_STA_CONTEXT return BOOLEAN is
+  begin
+    case PRIOR_TYPE is
+    when LT_SEMICOLON | LT_IS | LT_ARROW | LT_LOOP | LT_THEN
+	 | LT_BEGIN | LT_EXCEPTION | LT_DECLARE | LT_NULL | LT_RECORD
+	 | LT_ELSE =>
+      return TRUE;
+    when others =>
+      return FALSE;
+    end case;
+  end IS_STA_CONTEXT;
+
+  procedure CHECK_STA_CONTEXT is
+  begin
+    CLEAR_PAREN;
+    if not IS_STA_CONTEXT then
+      ERR("Missing terminator");
+    end if;
+  end CHECK_STA_CONTEXT;
+
+  procedure FIX is
+  begin
+    while L_TYPE /= LT_END_MARK loop
+      GET_TOKEN;
+    end loop;
+  end FIX;
+
+  procedure FIX_AND_WRITE is
+  begin
+    FIX;
+    WRITE_LINE;
+  end FIX_AND_WRITE;
+
+  procedure WRITE_LINE is
+    XCOL: INTEGER := 1;
+  begin
+    WRITE_ERROR;
+    OCOUNT := OCOUNT + 1;
+--@   PUT(">>>");PUT_LINE(SLINE.BDY(1 .. SLINE.LEN));
+    if SLINE.LEN > 0
+    and then SLINE.BDY(1) = '@' then
+      PUT(OFILE,"--@");
+      XCOL := 2;
+      if SLINE.LEN >= 2 and then SLINE.BDY(2) = ' ' then
+	XCOL := 3; 
+        if SLINE.LEN >= 3 and then SLINE.BDY(3) = ' ' then
+  	  XCOL := 4; 
+        end if;
+      end if;
+    end if;
+    PUT_LINE(OFILE,SLINE.BDY(XCOL .. SLINE.LEN));
+  end WRITE_LINE;
+
+  procedure WRITE_END(ITEM: STRING; INDENT: NATURAL; COND: BOOLEAN) is
+    OUT_COL : INTEGER;
+  begin
+    CHECK_STA_CONTEXT;
+    WRITE_ERROR;
+    OCOUNT := OCOUNT + 1;
+    if COND then
+      PUT(OFILE,"--@");
+      OUT_COL := 4;
+    else
+      OUT_COL := 1;
+    end if;
+    if INDENT > 8 then
+      OUT_COL := 1;
+      while INDENT - OUT_COL >= 8 loop
+        PUT(OFILE, ASCII.HT);
+        OUT_COL := OUT_COL + 8;
+      end loop;
+    end if;
+    for I in OUT_COL .. INDENT-1 loop
+      PUT(OFILE,' ');
+    end loop;
+    if ITEM = "" then
+      PUT_LINE(OFILE,"end;");
+    else
+      PUT(OFILE,"end ");PUT(OFILE,ITEM);PUT_LINE(OFILE,";");
+    end if;
+    PRIOR_TYPE := LT_SEMICOLON;
+  end WRITE_END;
+
+  procedure COPY_STUFF is
+  begin
+--@   PUT("COPY_STUFF");PUT(CUR_INDENT);PUT(' ');PUT_LINE(LEX_IMAGE(L_TYPE));
+    case L_TYPE is
+    when LT_FUNCTION | LT_PROCEDURE =>
+      CHECK_STA_CONTEXT;
+      COPY_SUBPROGRAM;
+    when LT_PACKAGE =>
+      CHECK_STA_CONTEXT;
+      COPY_PACKAGE;
+    when LT_DECLARE =>
+      CHECK_STA_CONTEXT;
+      COPY_DECLARE;
+    when LT_BEGIN =>
+      CHECK_STA_CONTEXT;
+      COPY_BEGIN;
+    when LT_IF =>
+      CHECK_STA_CONTEXT;
+      COPY_IF;
+    when LT_CASE =>
+      -- not after 'record' in Janus
+      CHECK_STA_CONTEXT;
+      COPY_CASE;
+    when LT_EXIT =>
+      CHECK_STA_CONTEXT;
+      COPY_EXIT;
+    when LT_RAISE | LT_RETURN | LT_TYPE | LT_SUBTYPE | LT_USE | LT_NULL =>
+      CHECK_STA_CONTEXT;
+      COPY_MISC;
+    when LT_IDENTIFIER =>
+      if IS_STA_CONTEXT then
+	CLEAR_PAREN;
+	COPY_ASSIGNMENT_ETC;
+      elsif PRIOR_TYPE = LT_IDENTIFIER or else PRIOR_TYPE = LT_NUMERIC_LIT
+      or else PRIOR_TYPE = LT_STRING_LIT or else PRIOR_TYPE = LT_CHAR_LIT
+      or else PRIOR_TYPE = LT_RIGHT_PAREN then
+	CHECK_STA_CONTEXT; -- will cause message
+	COPY_ASSIGNMENT_ETC;
+      else
+	COPY_MISC;
+      end if;
+    when LT_FOR | LT_WHILE | LT_LOOP =>
+      CHECK_STA_CONTEXT;
+      COPY_LOOP;
+    when LT_RECORD =>
+      CHECK_STA_CONTEXT;
+      COPY_RECORD;
+    when LT_ELSIF | LT_ELSE | LT_WHEN =>
+      CHECK_STA_CONTEXT;
+      ERR("elsif/else/when out of context");
+      COPY_MISC;
+    when LT_END =>
+      -- discard old 'end'
+      CHECK_STA_CONTEXT;
+      L_TYPE := LT_SEMICOLON;
+      READ_LINE;
+    when others =>
+      COPY_MISC;
+    end case;
+--@   PUT_LINE("end COPY_STUFF");
+  end COPY_STUFF;
+
+  procedure COPY_SUBPROGRAM is
+    INDENT:	INTEGER := CUR_INDENT;
+    COND:	BOOLEAN := CUR_COND;
+    SUBP_NAME:	PNAME;
+  begin
+    GET_TOKEN;
+    if L_TYPE = LT_IDENTIFIER or else L_TYPE = LT_STRING_LIT then
+      SET(SUBP_NAME, TO => L_TEXT);
+    else
+      ERR;
+    end if;
+    FIX;
+    while CUR_INDENT >= INDENT and then PRIOR_TYPE /= LT_IS
+    and then (PRIOR_TYPE /= LT_SEMICOLON or else PAREN_COUNT > 0) loop
+      WRITE_LINE;
+      READ_LINE_NO_CONTEXT;
+      FIX;
+    end loop;
+    if PRIOR_TYPE = LT_IS then
+      if L_TYPE = LT_NEW then
+        FIX;
+        while CUR_INDENT >= INDENT and then PRIOR_TYPE /= LT_IS
+        and then (PRIOR_TYPE /= LT_SEMICOLON or else PAREN_COUNT > 0) loop
+          WRITE_LINE;
+          READ_LINE_NO_CONTEXT;
+          FIX;
+        end loop;
+      else
+        COPY_BLOCK(TO_STRING(SUBP_NAME), INDENT, COND);
+      end if;
+    elsif PRIOR_TYPE = LT_SEMICOLON then
+      if (L_TYPE /= LT_PROCEDURE
+          and L_TYPE /= LT_FUNCTION
+          and L_TYPE /= LT_PACKAGE
+          and L_TYPE /= LT_PRAGMA
+          and L_TYPE /= LT_END_MARK
+          and L_TYPE /= LT_TASK)
+      then
+        ERR("Check for ';' instead of 'is' after subprogram");
+      end if;
+    else
+      ERR("no 'is' or ';' for function/procedure "&SUBP_NAME);
+    end if;
+  end COPY_SUBPROGRAM;
+
+  procedure COPY_PACKAGE is
+    INDENT:	INTEGER := CUR_INDENT;
+    COND:	BOOLEAN := CUR_COND;
+    SUBP_NAME:	PNAME;
+  begin
+    GET_TOKEN;
+    if L_TYPE = LT_IDENTIFIER then
+      SET(SUBP_NAME, TO => L_TEXT);
+      GET_TOKEN;
+      if L_TYPE = LT_RENAMES then
+        COPY_MISC;
+      else
+        COPY_MISC;
+        if L_TYPE = LT_PRIVATE then
+  	  COPY_MISC;
+        end if;
+        WRITE_END(TO_STRING(SUBP_NAME), INDENT, COND);
+      end if;
+    elsif L_TYPE = LT_BODY then
+      GET_TOKEN;
+      if L_TYPE = LT_IDENTIFIER then
+	SET(SUBP_NAME, TO => L_TEXT);
+      else
+	ERR;
+      end if;
+      COPY_MISC;
+      if L_TYPE = LT_BEGIN then
+	COPY_MISC;
+      end if;
+      if L_TYPE = LT_EXCEPTION then
+	COPY_EXCEPTION;
+      end if;
+      WRITE_END(TO_STRING(SUBP_NAME), INDENT, COND);
+    end if;
+  end COPY_PACKAGE;
+
+  procedure COPY_DECLARE is
+  begin
+    COPY_BLOCK("",CUR_INDENT,CUR_COND);
+  end COPY_DECLARE;
+
+  procedure COPY_BEGIN is
+    INDENT:	INTEGER := CUR_INDENT;
+    COND:	BOOLEAN := CUR_COND;
+  begin
+    COPY_MISC;
+    if CUR_INDENT = INDENT and then L_TYPE = LT_EXCEPTION then
+      COPY_EXCEPTION;
+    end if;
+    WRITE_END("",INDENT,COND);
+  end COPY_BEGIN;
+
+  procedure COPY_IF is
+    INDENT:	INTEGER := CUR_INDENT;
+    COND:	BOOLEAN := CUR_COND;
+  begin
+    COPY_AND_OR;
+    if CUR_INDENT = INDENT
+    and then L_TYPE = LT_THEN then
+      COPY_MISC;
+    end if;
+    while CUR_INDENT = INDENT and then L_TYPE = LT_ELSIF loop
+      CHECK_STA_CONTEXT;
+      COPY_AND_OR;
+      if CUR_INDENT = INDENT
+      and then L_TYPE = LT_THEN then
+        COPY_MISC;
+      end if;
+    end loop;
+    if CUR_INDENT = INDENT and then L_TYPE = LT_ELSE then
+      CHECK_STA_CONTEXT;
+      COPY_MISC;
+    end if;
+    WRITE_END("if",INDENT,COND);
+  end COPY_IF;
+
+  procedure COPY_CASE is
+    INDENT:	INTEGER := CUR_INDENT;
+    COND:	BOOLEAN := CUR_COND;
+  begin
+    COPY_MISC;
+    while CUR_INDENT = INDENT and then L_TYPE = LT_WHEN loop
+      CHECK_STA_CONTEXT;
+      COPY_MISC;
+    end loop;
+    WRITE_END("case",INDENT,COND);
+  end COPY_CASE;
+
+  procedure COPY_LOOP is
+    INDENT:	INTEGER := CUR_INDENT;
+    COND:	BOOLEAN := CUR_COND;
+  begin
+    if L_TYPE = LT_WHILE or L_TYPE = LT_FOR then
+      COPY_AND_OR;
+      if CUR_INDENT = INDENT
+      and then L_TYPE = LT_LOOP then
+        COPY_MISC;
+      end if;
+    else
+      COPY_MISC;
+    end if;
+    WRITE_END("loop",INDENT,COND);
+  end COPY_LOOP;
+
+  procedure COPY_RECORD is
+    INDENT:	INTEGER := CUR_INDENT;
+    COND:	BOOLEAN := CUR_COND;
+  begin
+    COPY_MISC;
+    WRITE_END("record",INDENT,COND);
+  end COPY_RECORD;
+
+  procedure COPY_EXIT is
+    INDENT:	INTEGER := CUR_INDENT;
+  begin
+    GET_TOKEN;
+    if L_TYPE = LT_END_MARK then
+      WRITE_LINE;
+      READ_LINE;
+      if CUR_INDENT > INDENT and then L_TYPE = LT_WHEN then
+	COPY_AND_OR;
+      else
+        ERR("'When' expected after exit");
+      end if;
+    end if;
+  end COPY_EXIT;
+
+  procedure COPY_ASSIGNMENT_ETC is
+    -- Check assignment or declaration for '=' instead of ':='
+    INDENT:	INTEGER := CUR_INDENT;
+    COND:	BOOLEAN := CUR_COND;
+  begin
+    while L_TYPE /= LT_END_MARK loop
+      GET_TOKEN;
+      if L_TYPE = LT_BECOMES then
+	CLEAR_PAREN;
+	exit;
+      elsif L_TYPE = LT_EQUAL and then PAREN_COUNT = 0 then
+	ERR;
+	exit;
+      end if;
+    end loop;
+    COPY_MISC;
+  end COPY_ASSIGNMENT_ETC;
+
+  procedure COPY_MISC is
+    -- Copy first statement without looking at it,
+    -- then copy anything indented under it
+    INDENT:	INTEGER := CUR_INDENT;
+  begin
+--@   PUT(INDENT);PUT_LINE(" COPY_MISC");
+    FIX_AND_WRITE;
+    READ_LINE;
+    while CUR_INDENT > INDENT loop
+      COPY_STUFF;
+    end loop;
+--@   PUT_LINE("end COPY_MISC");
+  end COPY_MISC;
+
+  procedure COPY_AND_OR is
+    -- Check for ':=' in condition
+    INDENT:	INTEGER := CUR_INDENT;
+  begin
+    while L_TYPE /= LT_END_MARK loop
+      GET_TOKEN;
+      if L_TYPE = LT_BECOMES then
+	ERR;
+      end if;
+    end loop;
+    COPY_MISC;
+    while CUR_INDENT = INDENT
+    and then (L_TYPE = LT_AND or else L_TYPE = LT_OR) loop
+      while L_TYPE /= LT_END_mark loop
+	GET_TOKEN;
+	if L_TYPE = LT_BECOMES then
+	  ERR;
+	end if;
+      end loop;
+      COPY_MISC;
+    end loop;
+  end COPY_AND_OR;
+
+  procedure COPY_BLOCK (ITEM: STRING; INDENT: NATURAL; COND: BOOLEAN) is
+  begin
+    CUR_INDENT := INDENT;
+    COPY_MISC;
+    if CUR_INDENT < INDENT or else L_TYPE /= LT_BEGIN then
+      ERR("No 'begin' for "&ITEM);
+    else
+      COPY_MISC;
+    end if;
+    if CUR_INDENT = INDENT and then L_TYPE = LT_EXCEPTION then
+      COPY_EXCEPTION;
+    end if;
+    WRITE_END(ITEM,INDENT,COND);
+  end COPY_BLOCK;
+
+  procedure COPY_EXCEPTION is
+    INDENT: INTEGER := CUR_INDENT;
+  begin
+    FIX_AND_WRITE;
+    READ_LINE;
+    while CUR_INDENT > INDENT
+    and then L_TYPE = LT_WHEN loop
+      COPY_MISC; 
+    end loop;
+  end COPY_EXCEPTION;
+
+begin
+  SET(ERR_MSG, TO => "");
+  LEX_INIT;
+  SET(FNAME, TO => "$$$PGM.TMP"); -- temporarily
+  -- remove leading blanks from file name (Janus requires)
+  declare
+    FNAME_TEMP: STRING(1 .. MAX_STRING);
+    FNAME_LENGTH: INTEGER;
+    COL: INTEGER;
+  begin
+    FNAME_LENGTH := LENGTH(FNAME);
+    FNAME_TEMP(1 .. FNAME_LENGTH) := TO_STRING(FNAME);
+    COL := 0;
+    for I in 1 .. FNAME_LENGTH loop
+      exit
+        when FNAME_TEMP(I) /= ' ';
+      COL := COL + 1;
+    end loop;
+    if COL > 0 then
+      SET(FNAME, TO => FNAME_TEMP(COL + 1 .. FNAME_LENGTH));
+    end if;
+  end;
+  OPEN (IFILE, IN_FILE, TO_STRING(FNAME));
+  CREATE (OFILE, OUT_FILE, "$$$.TMP");
+  READ_LINE;
+  while CUR_INDENT > 0 loop
+    COPY_STUFF;
+  end loop;
+  CHECK_STA_CONTEXT;
+  CLOSE (OFILE); -- In Janus, Not closed, to avoid extra form feed
+  CLOSE (IFILE);
+  PUT(ICOUNT); PUT (" in;"); PUT (OCOUNT); PUT_LINE(" out");
+end UGLY;

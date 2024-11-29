@@ -1,0 +1,11 @@
+with USERPK; use USERPK;
+
+package FIXWITH is
+
+  used_package_list: seq_type; -- uses in subunit ancestors
+
+  procedure FIX_WITH_CLAUSES(COMPLTN_UNIT: TREE);
+
+  function IS_ANCESTOR(UNIT_ID, SUBUNIT: TREE) return BOOLEAN;
+
+end FIXWITH;

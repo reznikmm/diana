@@ -1,0 +1,116 @@
+@@--LALRIDL.IDL 24-Mar-88
+
+--Standard initial IDL items
+
+@@  root	     => xd_high_page	: num_val,
+@@			xd_user_root	: user_root,
+@@			xd_source_list	: Seq Of sourceline,
+@@			xd_err_count	: num_val,
+@@			spare_1 	: void;
+@@
+@@  txtrep	     =>;		-- representation of text
+@@
+@@  num_val	     =>;		-- representation of (small) integer
+@@
+@@  BOOLEAN::= false | true;
+@@
+@@  false	     =>;		 -- used for Boolean
+@@
+@@  true	     =>;
+@@
+@@  nil 	     =>;		 -- empty list
+@@
+@@  list	     => xd_head 	: void,       -- list representation
+@@			xd_tail 	: void;
+@@
+@@  sourceline	     => xd_number	: num_val,
+@@			xd_error_list	: Seq Of error;
+@@
+@@  error	     => xd_srcpos	: Source_Position,
+@@			xd_text 	: txtrep;
+@@
+@@  symbol_rep	     => xd_text 	: txtrep,
+@@			xd_deflist	: Seq Of DEF_NAME;
+@@
+@@  hash	     => xd_list 	: Seq Of symbol_rep;
+@@
+@@ NON_DIANA ::=	root | txtrep | num_val | BOOLEAN | nil | list
+@@		      | sourceline | error | symbol_rep | hash | void;
+
+@@  void => ;
+
+-- IDL for grammar massaging (formerly in LALRIDL.IDL)
+-- Here to minimize recompilations of grammar things
+@@
+@@  user_root =>    xd_sourcename   : txtrep,
+@@		    xd_grammar	    : rule_s,
+@@		    xd_statelist    : state_s,
+@@		    xd_structure    : compilation,
+@@		    xd_timestamp    : Integer,
+@@		    spare_3	    : void;
+@@
+@@  RULE_S ::= rule_s;
+@@
+@@  rule_s =>	    xd_list	    : Seq Of rule;
+@@
+@@  rule =>	    xd_name	    : symbol_rep,
+@@		    xd_list	    : Seq Of alt,
+@@		    xd_is_nullable  : BOOLEAN, -- generates null string
+@@		    xd_ruleinfo     : ruleinfo;
+@@  rule =>	    lx_srcpos	    : Source_Position;
+@@
+@@  alt =>	    xd_list	    : Seq Of SYLLABLE,
+@@		    xd_alt_nbr	    : Integer,
+@@		    xd_rule	    : rule,
+@@		    xd_state_s	    : state_s, -- states with given first alt
+@@		    xd_semantics    : sem_s;
+@@  alt =>	    lx_srcpos	    : Source_Position;
+@@
+@@  SYLLABLE ::= terminal | nonterminal ;
+@@
+@@  terminal =>     xd_symrep	    : symbol_rep,
+@@		    xd_ter_nbr	    : Integer;
+@@  terminal =>     lx_srcpos	    : Source_Position;
+@@
+@@  nonterminal =>  xd_symrep	    : symbol_rep,
+@@		    xd_rule	    : rule;
+@@  nonterminal =>  lx_srcpos	    : Source_Position;
+@@
+@@  ruleinfo =>     xd_list	    : Seq Of terminal, -- initial terminals
+@@		    xd_is_reachable : BOOLEAN, -- reachable from start symbol
+@@		    xd_gens_ter_str : BOOLEAN, -- generates terminal string
+@@		xd_timechecked	: Integer, -- used in initial symbol algorithm;
+@@		xd_timechanged	: Integer, -- used in initial symbol algorithm;
+@@		 xd_rule_nbr	 : Integer, (temp) only in stat & later
+@@		 xd_init_nonter_s: rule_s;
+@@
+@@  state_s =>	    xd_list	    : Seq Of state;
+@@
+@@  state =>	    xd_list	    : Seq Of item,
+@@		    xd_state_nbr    : Integer;
+@@
+@@  STATE_VOID ::= state | void ;
+@@
+@@  item =>	    xd_alternative  : alternative,
+@@		    xd_alt_tail     : Seq Of SYLLABLE,
+@@		    xd_syl_nbr	    : Integer, -- which syl; 0 at start of rule
+@@		    xd_goto	    : STATE_VOID,
+@@		    xd_follow	    : terminal_s; -- follow terminals
+@@
+@@  terminal_s =>   xd_list	    : Seq Of terminal;
+@@
+@@  sem_s =>	    xd_list	    : Seq Of SEMANTICS,
+@@		    xd_sem_index    : Integer; -- assigned location
+@@
+@@  SEMANTICS ::= sem_node | sem_op ;
+@@
+@@  sem_node =>     xd_sem_op	    : Integer,
+@@		    xd_kind	    : Integer;
+@@
+@@  sem_op =>	    xd_sem_op	    : Integer;
+@@
+@@  NON_DIANA ::=   user_root | RULE_S | rule | alt
+@@		  | SYLLABLE | ruleinfo | state_s | STATE_VOID
+@@		  | item | terminal_s | sem_s | SEMANTICS;
+
+@@%End

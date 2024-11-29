@@ -1,0 +1,1047 @@
+with TEXT2_IO; use TEXT2_IO;
+with DIANA, DIANATTR, DIANAMAN;
+use DIANA, DIANATTR, DIANAMAN;
+with EXPTYPE; use EXPTYPE;
+with DEFUTIL; use DEFUTIL;
+with MAKENOD; use MAKENOD;
+with REQUTIL; use REQUTIL;
+
+package body VISUTIL is
+
+    procedure REDUCE_NAME_TYPES
+		( DEFSET:		in out DEFSET_TYPE
+		; TYPESET:		out TYPESET_TYPE );
+
+    procedure FIND_SELECTED_DEFS
+		( NAME_TYPESET: 	in out TYPESET_TYPE
+		; DESIGNATOR:		TREE
+		; DEFSET:		out DEFSET_TYPE );
+
+    procedure DEBUG_PRINT_DEF (DEF: TREE) is
+	HEADER: TREE := D(XD_HEADER, DEF);
+	REGION: TREE := D(XD_REGION_DEF, DEF);
+	PARAM_CURSOR: PARAM_CURSOR_TYPE;
+        PAREN_OR_COMMA: STRING(1..1) := "(";
+    begin
+	if not DEBUG then
+	    return;
+	end if;
+
+        PUT("    ");PUT(NODE_REP(DEF));
+        PUT(" ");PUT(NODE_REP(D(XD_SOURCE_NAME,DEF)));
+        PUT(" in "); PUT(NODE_REP(REGION));
+        PUT(INTEGER'IMAGE(DI(XD_LEX_LEVEL,REGION)));
+        PUT(" ");PUT_LINE(BOOLEAN'IMAGE(DB(XD_IS_USED,REGION)));
+	if KIND(HEADER) in CLASS_SUBP_ENTRY_HEADER then
+            PUT(ASCII.HT & "(");
+	    INIT_PARAM_CURSOR(PARAM_CURSOR,
+		LIST(D(AS_PARAM_S,HEADER)) );
+	    loop
+		PUT(PAREN_OR_COMMA);
+                PAREN_OR_COMMA := ",";
+		ADVANCE_PARAM_CURSOR(PARAM_CURSOR);
+		exit
+		    when PARAM_CURSOR.ID = CONST_VOID;
+		PUT(NODE_REP(GET_BASE_TYPE
+				(D(SM_OBJ_TYPE,PARAM_CURSOR.ID))));
+	    end loop;
+            PUT(")");
+	    if KIND(HEADER) = DN_FUNCTION_SPEC then
+                PUT("->");
+		PUT(NODE_REP(GET_BASE_TYPE(D(AS_NAME,HEADER))));
+	    end if;
+	    NEW_LINE;
+	end if;
+    end DEBUG_PRINT_DEF;
+
+    procedure FIND_VISIBILITY(EXP: TREE; DEFSET: out DEFSET_TYPE) is
+	-- for EXP, a used_object_id or a selected, return set
+	-- of def nodes for visible declarations of the used_object_id
+	-- or of the designator of the selected.  (Note: builtin
+	-- operations are not considered.)
+
+    begin
+	case KIND(EXP) is
+	when CLASS_DESIGNATOR =>
+	    FIND_DIRECT_VISIBILITY(EXP, DEFSET);
+	when DN_SELECTED =>
+	    FIND_SELECTED_VISIBILITY(EXP, DEFSET);
+	when others =>
+            QUIT("Invalid argument for Find_Visibility");
+	end case;
+    end FIND_VISIBILITY;
+
+    procedure FIND_DIRECT_VISIBILITY(ID: TREE; DEFSET: out DEFSET_TYPE) is
+        -- returns set of directly-visible def's for used_object_id
+
+	NEST_UNIQUE, USED_UNIQUE: TREE := CONST_VOID;
+	NEST_OVLOAD, USED_OVLOAD: SEQ_TYPE := MAKE;
+	NEST_UNIQUE_LEVEL:	  NATURAL := 0;
+	USED_IS_OK:		  BOOLEAN := TRUE;
+
+	DEFLIST:	SEQ_TYPE := LIST(D(LX_SYMREP, ID));
+	DEF:		TREE;
+	LEVEL:		INTEGER;
+	HEADER: 	TREE;
+	REGION_DEF:	TREE;
+	REGION_LEVEL:	TREE;
+
+	DEFLIST_1, DEFLIST_2: SEQ_TYPE;
+	DEF_1, DEF_2:	      TREE;
+
+	NEW_DEFSET:	DEFSET_TYPE := EMPTY_DEFSET;
+    begin
+	if DEBUG then
+            PUT("Find_Direct_Visibility: ");PUT(NODE_REP(ID));
+            PUT(" "); PUT_LINE(PRINTNAME(D(LX_SYMREP,ID)));
+	end if;
+
+
+	-- for each def for this name
+	while not IS_EMPTY(DEFLIST) loop
+	    POP(DEFLIST, DEF);
+
+	    -- if it is potentially still valid (i.e., region is defined)
+	    REGION_DEF := D(XD_REGION_DEF, DEF);
+	    if REGION_DEF /= CONST_VOID then
+
+		-- if it is defined in current or enclosing region
+		LEVEL := DI(XD_LEX_LEVEL, REGION_DEF);
+		if LEVEL > 0 then
+
+		    -- if it is overloadable
+		    if IS_OVERLOADABLE_HEADER(D(XD_HEADER, DEF)) then
+
+			-- add to list of overloadable defs
+			NEST_OVLOAD := APPEND(NEST_OVLOAD, DEF);
+
+		    -- else if it is not overloadable
+		    -- ... and either hides prior nested non-overloadable
+		    -- ...     or error at same level as prior non-overloadable
+		    elsif (LEVEL > NEST_UNIQUE_LEVEL)
+		    or else (LEVEL = NEST_UNIQUE_LEVEL
+			     and then D(XD_HEADER, DEF) = CONST_FALSE)
+		    then
+
+			-- remember this def as non-overloadable nested
+			NEST_UNIQUE_LEVEL := LEVEL;
+			NEST_UNIQUE := DEF;
+
+			-- disallow used defs
+			USED_IS_OK := FALSE;
+		    end if;
+
+		-- else if it used defs are not known to be disallowed
+		-- ... and the region enclosing this def has a use clause
+		-- ... and this def is from the visible part
+		elsif USED_IS_OK
+		and then DB(XD_IS_USED, REGION_DEF)
+		and then DB(XD_IS_IN_SPEC, DEF) then
+
+		    -- if this def is overloadable and not entry
+		    if IS_OVERLOADABLE_HEADER(D(XD_HEADER, DEF))
+		    and then KIND(D(XD_SOURCE_NAME, DEF)) /= DN_ENTRY then
+
+			-- add to list of overloadable used defs
+			USED_OVLOAD := APPEND(USED_OVLOAD, DEF);
+
+		    -- else if this is first non-overloadable used entry
+		    -- ... or there was an error in its declaration
+		    elsif USED_UNIQUE = CONST_VOID
+		    or else D(XD_HEADER, DEF) = CONST_FALSE then
+
+			-- save this def as non-overloadable nested def
+			USED_UNIQUE := DEF;
+
+		    -- else -- since this is a duplicate non-overloadable used
+		    else
+
+			-- disallow used defs
+			USED_IS_OK := FALSE;
+		    end if;
+		end if;
+	    end if;
+	end loop;
+
+	-- if there are both non-overloadable and overloadable nested defs
+	if NEST_UNIQUE /= CONST_VOID
+	and then not IS_EMPTY(NEST_OVLOAD) then
+
+	    -- discard hidden nested defs
+	    declare
+		TEMP_OVLOAD:	TREE;
+		NEW_DEFLIST:	SEQ_TYPE := MAKE;
+	    begin
+		while not IS_EMPTY(NEST_OVLOAD) loop
+		    POP(NEST_OVLOAD, TEMP_OVLOAD);
+		    if DI(XD_LEX_LEVEL, D(XD_REGION_DEF, TEMP_OVLOAD))
+				> NEST_UNIQUE_LEVEL
+		    then
+			NEW_DEFLIST := APPEND(NEW_DEFLIST, TEMP_OVLOAD);
+			NEST_UNIQUE := CONST_VOID;
+		    end if;
+		end loop;
+		NEST_OVLOAD := NEW_DEFLIST;
+	    end;
+
+	    -- disallow used defs
+	    USED_IS_OK := FALSE;
+	end if;
+
+
+	-- if there is a visible non-overloadable nested def
+	if NEST_UNIQUE /= CONST_VOID then
+
+	    declare
+		HEADER_KIND:	NODE_NAME := KIND(D(XD_HEADER,NEST_UNIQUE));
+	    begin
+
+		-- if it is not yet fully declared or in error
+		if HEADER_KIND in CLASS_BOOLEAN then
+
+		    -- empty defset is to be returned
+		    -- put out correct error or warning message
+		    if HEADER_KIND = DN_FALSE then
+			WARNING( D(LX_SRCPOS, ID)
+                                    , "Prior error in declaration - "
+				      & PRINTNAME(D(LX_SYMREP, ID)) );
+		    else
+			ERROR( D(LX_SRCPOS, ID)
+                                    , "Name not yet visible - "
+				      & PRINTNAME(D(LX_SYMREP, ID)) );
+		    end if;
+
+		-- else -- since it is fully declared and not in error
+		else
+
+		    -- this is the correct def
+		    ADD_TO_DEFSET(NEW_DEFSET, NEST_UNIQUE);
+		end if;
+
+		-- return new defset
+		DEFSET := NEW_DEFSET;
+		return;
+	    end;
+	end if;
+
+
+	-- here, either there are no nested defs or all are overloadable
+
+	-- if used defs have been disallowed
+	-- ... (because non-overloaded nest or because multiple non-overloaded)
+	if not USED_IS_OK then
+
+	    -- clear used defs
+	    USED_UNIQUE := CONST_VOID;
+	    USED_OVLOAD := MAKE;
+	end if;
+
+
+	-- if there is a non-overloadable used def
+	if USED_UNIQUE /= CONST_VOID then
+
+	    -- if it is from a declaration which was in error
+	    if D(XD_HEADER, USED_UNIQUE) = CONST_FALSE then
+
+		-- print warning
+		WARNING( D(LX_SRCPOS, ID)
+                            , "Prior error in (used) declaration - "
+			      & PRINTNAME(D(LX_SYMREP, ID)) );
+
+		-- return empty defset
+		DEFSET := EMPTY_DEFSET;
+		return;
+
+	    -- else if there are no overloadable defs
+	    elsif IS_EMPTY(NEST_OVLOAD)
+	    and then IS_EMPTY(USED_OVLOAD) then
+
+		-- return the (unique) non-overloadable used def
+		ADD_TO_DEFSET(NEW_DEFSET, USED_UNIQUE);
+		DEFSET := NEW_DEFSET;
+		return;
+
+	    -- else -- since (1) overloadable and (2) non-overloadable used defs
+	    else
+
+		-- discard all used defs
+		USED_UNIQUE := CONST_VOID;
+		USED_OVLOAD := MAKE;
+	    end if;
+	end if;
+
+	-- find nested defs which are not hidden
+	DEFLIST_1 := NEST_OVLOAD;
+	while not IS_EMPTY(DEFLIST_1) loop
+	    POP(DEFLIST_1, DEF_1);
+
+	    if DEBUG then
+		DEBUG_PRINT_DEF(DEF_1);
+	    end if;
+
+	    DEFLIST_2 := NEST_OVLOAD;
+	    while not IS_EMPTY(DEFLIST_2) loop
+		DEF_2 := HEAD(DEFLIST_2);
+		if DEF_2 /= DEF_1
+		and then ARE_HOMOGRAPH_HEADERS
+			    ( D(XD_HEADER, DEF_1)
+			    , D(XD_HEADER, DEF_2) )
+		then
+		    if DEBUG then
+                        PUT("      homo: ");PUT_LINE(NODE_REP(DEF_2));
+		    end if;
+
+		    if DI(XD_LEX_LEVEL, D(XD_REGION_DEF,DEF_1))
+				> DI(XD_LEX_LEVEL, D(XD_REGION_DEF,DEF_2))
+		    then
+			null; 
+		    elsif DI(XD_LEX_LEVEL, D(XD_REGION_DEF,DEF_1))
+				< DI(XD_LEX_LEVEL, D(XD_REGION_DEF,DEF_2))
+		    then
+			-- hidden by def_2
+		        exit;
+		    elsif KIND(D(XD_SOURCE_NAME, DEF_1)) = DN_BLTN_OPERATOR_ID
+		    or else KIND(D(XD_SOURCE_NAME, DEF_1)) in CLASS_ENUM_LITERAL
+		    then
+			-- hidden by def_2
+			exit;
+		    elsif KIND(D(XD_SOURCE_NAME, DEF_2)) = DN_BLTN_OPERATOR_ID
+		    or else KIND(D(XD_SOURCE_NAME, DEF_2)) in CLASS_ENUM_LITERAL
+		    then
+			null;
+		    elsif KIND(D(XD_SOURCE_NAME, DEF_1)) in CLASS_SUBPROG_NAME
+		    and then ( KIND(D(SM_UNIT_DESC, D(XD_SOURCE_NAME,DEF_1)))
+					= DN_DERIVED_SUBPROG
+			    or else ( KIND(D(SM_UNIT_DESC
+					    , D(XD_SOURCE_NAME,DEF_1)))
+				        = DN_IMPLICIT_NOT_EQ
+			   	    and then KIND(D(SM_UNIT_DESC
+					    	, D(SM_EQUAL, D(SM_UNIT_DESC
+						   , D(XD_SOURCE_NAME,DEF_1)))))
+					    = DN_DERIVED_SUBPROG ) )
+		    then
+			-- hidden by def_2
+			exit;
+		    elsif KIND(D(XD_SOURCE_NAME, DEF_2)) in CLASS_SUBPROG_NAME
+		    and then ( KIND(D(SM_UNIT_DESC, D(XD_SOURCE_NAME,DEF_2)))
+					= DN_DERIVED_SUBPROG
+			    or else ( KIND(D(SM_UNIT_DESC
+					    , D(XD_SOURCE_NAME,DEF_2)))
+				        = DN_IMPLICIT_NOT_EQ
+			   	    and then KIND(D(SM_UNIT_DESC
+					    	, D(SM_EQUAL, D(SM_UNIT_DESC
+						   , D(XD_SOURCE_NAME,DEF_1)))))
+					    = DN_DERIVED_SUBPROG ) )
+		    then
+			null;
+		    else
+			-- hidden by def_2
+			exit;
+		    end if;
+		end if;
+		DEFLIST_2 := TAIL(DEFLIST_2);
+	    end loop;
+	    if IS_EMPTY(DEFLIST_2) then
+		ADD_TO_DEFSET(NEW_DEFSET, DEF_1);
+	    end if;
+	end loop;
+
+	-- find used defs which are not hidden
+	DEFLIST_1 := USED_OVLOAD;
+	while not IS_EMPTY(DEFLIST_1) loop
+	    POP(DEFLIST_1, DEF_1);
+
+	    if DEBUG then
+		DEBUG_PRINT_DEF(DEF_1);
+	    end if;
+
+	    -- check for used defs hidden by nested defs
+	    DEFLIST_2 := NEST_OVLOAD;
+	    while not IS_EMPTY(DEFLIST_2) loop
+		DEF_2 := HEAD(DEFLIST_2);
+		if ARE_HOMOGRAPH_HEADERS
+			    ( D(XD_HEADER, DEF_1)
+			    , D(XD_HEADER, DEF_2) )
+		then
+		    if DEBUG then
+                        PUT("      homo: ");PUT_LINE(NODE_REP(DEF_2));
+		    end if;
+
+		    -- hidden by def_2
+		    exit;
+		end if;
+		DEFLIST_2 := TAIL(DEFLIST_2);
+
+	    end loop;
+
+	    -- if not hidden by nested def
+	    if IS_EMPTY(DEFLIST_2) then
+
+	      -- check if hidden by another used def 
+	      DEFLIST_2 := USED_OVLOAD;
+	      while not IS_EMPTY(DEFLIST_2) loop
+		DEF_2 := HEAD(DEFLIST_2);
+		if DEF_2 /= DEF_1
+		and then ARE_HOMOGRAPH_HEADERS
+			    ( D(XD_HEADER, DEF_1)
+			    , D(XD_HEADER, DEF_2) )
+		then
+		    if DEBUG then
+                        PUT("      homo: ");PUT_LINE(NODE_REP(DEF_2));
+		    end if;
+
+		    if D(XD_REGION_DEF, DEF_1) /= D(XD_REGION_DEF, DEF_2) then
+			-- both are made visible (but will be ambiguous)
+			null;
+		    elsif KIND(D(XD_SOURCE_NAME, DEF_1)) = DN_BLTN_OPERATOR_ID
+		    or else KIND(D(XD_SOURCE_NAME, DEF_1)) in CLASS_ENUM_LITERAL
+		    then
+			-- hidden by def_2
+			exit;
+		    elsif KIND(D(XD_SOURCE_NAME, DEF_2)) = DN_BLTN_OPERATOR_ID
+		    or else KIND(D(XD_SOURCE_NAME, DEF_2)) in CLASS_ENUM_LITERAL
+		    then
+			null;
+		    elsif KIND(D(XD_SOURCE_NAME, DEF_1)) in CLASS_SUBPROG_NAME
+		    and then ( KIND(D(SM_UNIT_DESC, D(XD_SOURCE_NAME,DEF_1)))
+					= DN_DERIVED_SUBPROG
+			    or else ( KIND(D(SM_UNIT_DESC
+					    , D(XD_SOURCE_NAME,DEF_1)))
+				        = DN_IMPLICIT_NOT_EQ
+			   	    and then KIND(D(SM_UNIT_DESC
+					    	, D(SM_EQUAL, D(SM_UNIT_DESC
+						   , D(XD_SOURCE_NAME,DEF_1)))))
+					    = DN_DERIVED_SUBPROG ) )
+		    then
+			-- hidden by def_2
+			exit;
+		    elsif KIND(D(XD_SOURCE_NAME, DEF_2)) in CLASS_SUBPROG_NAME
+		    and then ( KIND(D(SM_UNIT_DESC, D(XD_SOURCE_NAME,DEF_2)))
+					= DN_DERIVED_SUBPROG
+			    or else ( KIND(D(SM_UNIT_DESC
+					    , D(XD_SOURCE_NAME,DEF_2)))
+				        = DN_IMPLICIT_NOT_EQ
+			   	    and then KIND(D(SM_UNIT_DESC
+					    	, D(SM_EQUAL, D(SM_UNIT_DESC
+						   , D(XD_SOURCE_NAME,DEF_1)))))
+					    = DN_DERIVED_SUBPROG ) )
+		    then
+			null;
+		    else
+			-- hidden by def_2
+			exit;
+		    end if;
+		end if;
+		DEFLIST_2 := TAIL(DEFLIST_2);
+	      end loop;
+	    end if;
+	    if IS_EMPTY(DEFLIST_2) then
+		ADD_TO_DEFSET(NEW_DEFSET, DEF_1);
+	    end if;
+	end loop;
+
+	if IS_EMPTY(NEW_DEFSET) then
+	    ERROR(D(LX_SRCPOS, ID)
+                       , "No directly visible declaration - "
+			 & PRINTNAME(D(LX_SYMREP, ID)) );
+	end if;
+	DEFSET := NEW_DEFSET;
+    end FIND_DIRECT_VISIBILITY;
+
+    ----------------------------------------------------------------
+    ----------------------------------------------------------------
+
+    procedure FIND_SELECTED_VISIBILITY(SELECTED: TREE; DEFSET: out DEFSET_TYPE)
+    is
+        -- Given a selected node, find all visible def's for the designator
+
+	NAME:		TREE := D(AS_NAME, SELECTED);
+	DESIGNATOR:	TREE := D(AS_DESIGNATOR, SELECTED);
+
+	NEW_DEFSET:		DEFSET_TYPE := EMPTY_DEFSET;
+
+	NAME_DEFSET:		DEFSET_TYPE := EMPTY_DEFSET;
+	NAME_DEFINTERP: 	DEFINTERP_TYPE;
+	NAME_DEF:		TREE := CONST_VOID;
+	NAME_TYPESET:		TYPESET_TYPE := EMPTY_TYPESET;
+
+	TEMP_LIST:		SEQ_TYPE;
+	TEMP:			TREE;
+    begin
+	-- If designator is a string, make it a used_op
+	if KIND(DESIGNATOR) = DN_STRING_LITERAL then
+	    DESIGNATOR := MAKE_USED_OP_FROM_STRING(DESIGNATOR);
+	    D(AS_DESIGNATOR, SELECTED, DESIGNATOR);
+	end if;
+
+	-- According to the kind of prefix
+        case CLASS_EXP'(KIND(NAME)) is
+
+	when DN_USED_OBJECT_ID =>
+	    -- for used_object_id, find direct visibility
+	    FIND_DIRECT_VISIBILITY(NAME, NAME_DEFSET);
+
+	when DN_STRING_LITERAL =>
+	    -- for string, make it a used_op and find direct visibility
+	    NAME := MAKE_USED_OP_FROM_STRING(NAME);
+	    D(AS_NAME, SELECTED, NAME);
+
+	    FIND_DIRECT_VISIBILITY(NAME, NAME_DEFSET);
+
+	when DN_SELECTED =>
+	    -- for selected, find selected visibility
+	    FIND_SELECTED_VISIBILITY(NAME
+			, NAME_DEFSET );
+
+	when others =>
+	    -- otherwise, must be expression; find possible types
+	    EVAL_EXP_TYPES(NAME, NAME_TYPESET);
+	end case;
+
+        -- If we found some name def's
+	if not IS_EMPTY(NAME_DEFSET) then
+
+	    -- If there is an enclosing region
+	    NAME_DEF := GET_ENCLOSING_DEF(NAME, NAME_DEFSET);
+	    if NAME_DEF /= CONST_VOID then
+
+                -- It's the only interpretation of the name
+		-- Look for entities immediately within the enclosing region
+		-- (Note.  RM 4.1.3/10 has preference rule only for
+		--  ... enclosing subprogram or accept statement; however
+		--  ... if, e.g., enclosing package, only one is visible anyway)
+		TEMP_LIST := LIST(D(LX_SYMREP, DESIGNATOR));
+		while not IS_EMPTY(TEMP_LIST) loop
+		    POP(TEMP_LIST, TEMP);
+		    if D(XD_REGION_DEF, TEMP) = NAME_DEF then
+			ADD_TO_DEFSET(NEW_DEFSET, TEMP);
+		    end if;
+		end loop;
+
+
+	    -- Else if prefix is a package name
+	    elsif KIND(GET_THE_ID(NAME_DEFSET)) = DN_PACKAGE_ID then
+
+                -- It's the only interpretation of the name
+		-- Check for renaming; use original package
+		NAME_DEFINTERP := HEAD(NAME_DEFSET);
+		NAME_DEF := GET_DEF(NAME_DEFINTERP);
+		if KIND(D(SM_UNIT_DESC,D(XD_SOURCE_NAME,NAME_DEF)))
+			= DN_RENAMES_UNIT
+		then
+		    NAME_DEF := GET_DEF_FOR_ID(GET_BASE_PACKAGE
+				( D(XD_SOURCE_NAME,NAME_DEF) ) );
+		end if;
+
+		-- Look for entities defined immediately within specification
+		TEMP_LIST := LIST(D(LX_SYMREP, DESIGNATOR));
+		while not IS_EMPTY(TEMP_LIST) loop
+		    POP(TEMP_LIST, TEMP);
+		    if D(XD_REGION_DEF, TEMP) = NAME_DEF
+		    and then DB(XD_IS_IN_SPEC, TEMP) then
+			ADD_TO_DEFSET(NEW_DEFSET, TEMP);
+		    end if;
+		end loop;
+	    end if;
+	end if;
+
+	-- If it is an expanded name
+	if NAME_DEF /= CONST_VOID then
+
+	    -- Make the prefix a used_name_id if it is an identifier
+	    -- and store the definition
+	    if KIND(NAME) = DN_SELECTED then
+		if KIND(D(AS_DESIGNATOR, NAME)) = DN_USED_OBJECT_ID then
+		    D(AS_DESIGNATOR, NAME
+			    , MAKE_USED_NAME_ID_FROM_OBJECT
+				    ( D(AS_DESIGNATOR, NAME) ));
+		end if;
+		D(SM_DEFN, D(AS_DESIGNATOR, NAME), D(XD_SOURCE_NAME, NAME_DEF));
+	    else
+		if KIND(NAME) = DN_USED_OBJECT_ID then
+		    NAME := MAKE_USED_NAME_ID_FROM_OBJECT(NAME);
+		    D(AS_NAME, SELECTED, NAME);
+		end if;
+		D(SM_DEFN, NAME, D(XD_SOURCE_NAME,NAME_DEF));
+	    end if;
+
+	    -- discard hidden implicit subprograms
+	    declare
+		OLD_DEFSET: DEFSET_TYPE := NEW_DEFSET;
+		OLD_DEFINTERP: DEFINTERP_TYPE;
+		OLD_ID: TREE;
+		TEMP_DEFSET: DEFSET_TYPE;
+		TEMP_DEFINTERP: DEFINTERP_TYPE;
+		TEMP_ID: TREE;
+		NEW_NEW_DEFSET: DEFSET_TYPE := EMPTY_DEFSET;
+	    begin
+		while not IS_EMPTY(OLD_DEFSET) loop
+		    POP(OLD_DEFSET, OLD_DEFINTERP);
+		    OLD_ID := D(XD_SOURCE_NAME, GET_DEF(OLD_DEFINTERP));
+		    if KIND(OLD_ID) = DN_BLTN_OPERATOR_ID
+		    or else KIND(OLD_ID) in CLASS_ENUM_LITERAL 
+		    or else ( KIND(OLD_ID)in CLASS_SUBPROG_NAME
+			    and then KIND(D(SM_UNIT_DESC,OLD_ID))
+				    = DN_INSTANTIATION )
+		    then
+			TEMP_DEFSET := NEW_DEFSET;
+			while not IS_EMPTY(TEMP_DEFSET) loop
+			    TEMP_DEFINTERP := HEAD(TEMP_DEFSET);
+			    if TEMP_DEFINTERP /= OLD_DEFINTERP
+			    and then ARE_HOMOGRAPH_HEADERS
+					( D(XD_HEADER, GET_DEF(OLD_DEFINTERP))
+					, D(XD_HEADER, GET_DEF(TEMP_DEFINTERP)))
+			    then
+				if KIND(OLD_ID) = DN_BLTN_OPERATOR_ID
+				or else KIND(OLD_ID) in CLASS_ENUM_LITERAL then
+				    exit;
+			    	else
+				    TEMP_ID := D(XD_SOURCE_NAME
+						, GET_DEF(TEMP_DEFINTERP) );
+				    if KIND(TEMP_ID) /= DN_BLTN_OPERATOR_ID
+				    and then KIND(TEMP_ID)
+					    not in CLASS_ENUM_LITERAL
+				    then
+					exit;
+				    end if;
+				end if;
+			    end if;
+			    POP(TEMP_DEFSET, TEMP_DEFINTERP);
+			end loop;
+		 	if IS_EMPTY(TEMP_DEFSET) then
+			    ADD_TO_DEFSET(NEW_NEW_DEFSET, OLD_DEFINTERP);
+			end if;
+		    else
+			ADD_TO_DEFSET(NEW_NEW_DEFSET, OLD_DEFINTERP);
+		    end if;
+		end loop;
+		NEW_DEFSET := NEW_NEW_DEFSET;
+	    end;
+
+	-- Else if it is a defined name or a selected, it must be an expression
+	elsif not IS_EMPTY(NAME_DEFSET) then
+	    REDUCE_NAME_TYPES(NAME_DEFSET, NAME_TYPESET);
+	    STASH_DEFSET(NAME, NAME_DEFSET);
+	end if;
+
+	-- If expression, only consider types which have selected components
+	if not IS_EMPTY(NAME_TYPESET) then
+	    FIND_SELECTED_DEFS(NAME_TYPESET, DESIGNATOR, NEW_DEFSET);
+	end if;
+	if KIND(NAME) /= DN_USED_NAME_ID then
+	    STASH_TYPESET(NAME, NAME_TYPESET);
+	end if;
+
+	-- check for no declarations found
+	if IS_EMPTY(NEW_DEFSET)
+	and then not (IS_EMPTY(NAME_DEFSET) and then IS_EMPTY(NAME_TYPESET))
+	then
+	    ERROR(D(LX_SRCPOS,DESIGNATOR)
+                        , "Not visible by selection - "
+			  & PRINTNAME(D(LX_SYMREP,DESIGNATOR)) );
+
+	-- check for error or not-yet-visible declaration 
+	else
+	    declare
+		TEMP_DEFSET:	DEFSET_TYPE := NEW_DEFSET;
+		TEMP_DEFINTERP: DEFINTERP_TYPE;
+		HEADER_KIND:	NODE_NAME;
+	    begin
+
+		-- for each def
+		while not is_empty(temp_defset) loop
+		    pop(temp_defset, temp_definterp);
+
+		    -- if it is not yet fully declared or in error
+		    HEADER_KIND := KIND(D(XD_HEADER, GET_DEF(TEMP_DEFINTERP)));
+		    if HEADER_KIND in CLASS_BOOLEAN then
+
+		        -- empty defset is to be returned
+		        NEW_DEFSET := EMPTY_DEFSET;
+
+		        -- put out correct error or warning message
+		        if HEADER_KIND = DN_FALSE then
+			    WARNING( D(LX_SRCPOS, DESIGNATOR)
+                                    , "Prior error in declaration - "
+				      & PRINTNAME(D(LX_SYMREP, DESIGNATOR)) );
+		        else
+			    ERROR( D(LX_SRCPOS, DESIGNATOR)
+                                    , "Name not yet visible - "
+				      & PRINTNAME(D(LX_SYMREP, DESIGNATOR)) );
+			end if;
+		    end if;
+		end loop;
+	    end;
+	end if;
+
+	-- Copy results to out argument and return
+	DEFSET := NEW_DEFSET;
+    end FIND_SELECTED_VISIBILITY;
+
+    ----------------------------------------------------------------
+
+    function GET_ENCLOSING_DEF(USED_NAME: TREE; DEFSET: DEFSET_TYPE)
+	    return TREE
+    is
+	-- gets innermost enclosing name in Defset
+	-- Defset has names defined in enclosing regions first
+	-- Note.  Parameter Used_Name only for error messages
+
+	TEMP_DEFSET:	DEFSET_TYPE := DEFSET;
+	DEFINTERP:	DEFINTERP_TYPE;
+	DEF:		TREE;
+
+	ENCLOSING_DEF:	TREE := CONST_VOID;
+	IS_MULTIPLE_DEF:BOOLEAN := FALSE;
+    begin
+	-- for each def in defset
+	while not IS_EMPTY(TEMP_DEFSET) loop
+	    POP(TEMP_DEFSET, DEFINTERP);
+	    DEF := GET_DEF(DEFINTERP);
+
+	    -- stop looking if not defined in enclosing region
+	    if DI(XD_LEX_LEVEL, D(XD_REGION_DEF, DEF)) = 0 then
+		exit;
+	    end if;
+
+	    -- if it is an enclosing region, have found one
+	    if DI(XD_LEX_LEVEL, DEF) > 0 then
+
+		-- if this is the first one found
+		if ENCLOSING_DEF = CONST_VOID then
+
+		    -- then remember it
+		    ENCLOSING_DEF := DEF;
+		else
+		    -- else remember that error occurred
+		    IS_MULTIPLE_DEF := TRUE;
+
+		    -- also retain most-deeply-nested result
+		    if DI(XD_LEX_LEVEL, DEF) > DI(XD_LEX_LEVEL, ENCLOSING_DEF)
+		    then
+			ENCLOSING_DEF := DEF;
+		    end if;
+		end if;
+	    end if;
+	end loop;
+
+	-- If multiple definition was seen
+	if IS_MULTIPLE_DEF then
+
+	    -- Put out error message
+            ERROR(D(LX_SRCPOS, USED_NAME), "Ambiguous enclosing region");
+	end if;
+
+	-- Return most-deeply-nested def, if found, or void
+	return ENCLOSING_DEF;
+    end GET_ENCLOSING_DEF;
+
+    ----------------------------------------------------------------
+
+    function MAKE_USED_NAME_ID_FROM_OBJECT(USED_OBJECT_ID: TREE) return TREE is
+    begin
+	return MAKE_USED_NAME_ID
+		( LX_SRCPOS => D(LX_SRCPOS, USED_OBJECT_ID)
+		, LX_SYMREP => D(LX_SYMREP, USED_OBJECT_ID)
+		, SM_DEFN => D(SM_DEFN, USED_OBJECT_ID) );
+    end MAKE_USED_NAME_ID_FROM_OBJECT;
+
+    ----------------------------------------------------------------
+
+    function MAKE_USED_OP_FROM_STRING(STRING_NODE: TREE) return TREE is
+
+	function MAKE_UPPER_CASE (A: STRING) return STRING is
+            A_WORK: STRING(1 .. A'LENGTH) := A;
+            MAGIC: constant := CHARACTER'POS('a') - CHARACTER'POS('A');
+	begin
+            for I in A_WORK'RANGE loop
+                if A_WORK(I) in 'a' .. 'z' then
+                    A_WORK(I) := CHARACTER'VAL(CHARACTER'POS(A_WORK(I))-MAGIC);
+		end if;
+	    end loop;
+	    return A_WORK;
+	end MAKE_UPPER_CASE;
+
+    begin -- Make_Used_Op_From_String
+	return MAKE_USED_OP
+		( LX_SRCPOS => D(LX_SRCPOS, STRING_NODE)
+		, LX_SYMREP
+			=> STORESYM(MAKE_UPPER_CASE(PRINTNAME
+					(D(LX_SYMREP,STRING_NODE)) )));
+    end MAKE_USED_OP_FROM_STRING;
+
+    ----------------------------------------------------------------
+
+    procedure REDUCE_NAME_TYPES
+		( DEFSET:		in out DEFSET_TYPE
+		; TYPESET:		out TYPESET_TYPE )
+    is
+	-- reduces Defset to names which have a type (are expressions)
+	-- (note that functions requiring parameters are discarded here)
+
+	DEFINTERP:		DEFINTERP_TYPE;
+	DEF:			TREE;
+
+	NEW_DEFSET:		DEFSET_TYPE := EMPTY_DEFSET;
+	NEW_TYPESET:		TYPESET_TYPE := EMPTY_TYPESET;
+	TYPE_SPEC:		TREE;
+    begin
+	while not IS_EMPTY(DEFSET) loop
+	    POP(DEFSET, DEFINTERP);
+	    DEF := GET_DEF(DEFINTERP);
+	    TYPE_SPEC := EXPRESSION_TYPE_OF_DEF(DEF);
+
+	    if TYPE_SPEC /= CONST_VOID then
+		ADD_TO_DEFSET(NEW_DEFSET, DEFINTERP);
+		ADD_TO_TYPESET(NEW_TYPESET, TYPE_SPEC
+				, GET_EXTRAINFO(DEFINTERP) );
+	    end if;
+	end loop;
+
+	DEFSET := NEW_DEFSET;
+	TYPESET := NEW_TYPESET;
+    end REDUCE_NAME_TYPES;
+
+    ----------------------------------------------------------------
+
+    function EXPRESSION_TYPE_OF_DEF(DEF: TREE) return TREE is
+	-- returns base type if def represents an expression
+	-- otherwise returns void
+
+	ID:		constant TREE := D(XD_SOURCE_NAME, DEF);
+	HEADER: 	constant TREE := D(XD_HEADER, DEF);
+    begin
+	if KIND(ID) = DN_NUMBER_ID then
+	    if KIND(D(SM_OBJ_TYPE,ID)) = DN_UNIVERSAL_REAL then
+		return MAKE(DN_ANY_REAL);
+	    else
+		return MAKE(DN_ANY_INTEGER);
+	    end if;
+	elsif KIND(ID) in CLASS_OBJECT_NAME then
+	    return GET_BASE_TYPE(D(SM_OBJ_TYPE, ID));
+	elsif KIND(HEADER) = DN_FUNCTION_SPEC
+	and then ALL_PARAMETERS_HAVE_DEFAULTS(HEADER) then
+	    return GET_BASE_TYPE(D(AS_NAME, HEADER));
+	elsif KIND(ID) in CLASS_TYPE_NAME
+	and then KIND(GET_BASE_TYPE(ID)) = DN_TASK_SPEC
+	and then DI(XD_LEX_LEVEL, GET_DEF_FOR_ID
+			( D(XD_SOURCE_NAME, GET_BASE_TYPE(ID)) ))
+		    > 0
+	then
+	    return GET_BASE_TYPE(ID);
+	else
+	    return CONST_VOID;
+	end if;
+    end EXPRESSION_TYPE_OF_DEF;
+
+    ----------------------------------------------------------------
+
+    function ALL_PARAMETERS_HAVE_DEFAULTS(HEADER: TREE) return BOOLEAN is
+	-- given a subprogram or entry header, test if all declared
+	-- parameters have a default value (or there are no parameters)
+
+	PARAM_LIST:	SEQ_TYPE := LIST(D(AS_PARAM_S, HEADER));
+	PARAM:		TREE;
+    begin
+	-- for each parameter declaration
+	while not IS_EMPTY(PARAM_LIST) loop
+	    POP(PARAM_LIST, PARAM);
+
+	    -- if it does not have a default value
+	    if D(AS_EXP, PARAM) = CONST_VOID then
+
+		-- then all parameters do not have defaults; return false
+		return FALSE;
+	    end if;
+	end loop;
+
+	-- No parameters found without default; return true
+	return TRUE;
+
+    end ALL_PARAMETERS_HAVE_DEFAULTS;
+
+    ----------------------------------------------------------------
+
+    --- $$$$ temporary $$$$$$$$$$$$$$
+    function IS_OVERLOADABLE_HEADER(HEADER: TREE) return BOOLEAN is
+    begin
+	if KIND(HEADER) = DN_FUNCTION_SPEC
+	or KIND(HEADER) = DN_PROCEDURE_SPEC
+	or KIND(HEADER) = DN_ENTRY
+	then
+	    return TRUE;
+	else
+	    return FALSE;
+	end if;
+    end IS_OVERLOADABLE_HEADER;
+
+    ----------------------------------------------------------------
+
+    function CAST_TREE (ARG: SEQ_TYPE) return TREE is
+    begin
+	return ARG.H;
+    end CAST_TREE;
+
+    function CAST_SEQ_TYPE (ARG: TREE) return SEQ_TYPE is
+    begin
+	return SINGLETON(ARG);
+    end CAST_SEQ_TYPE;
+
+    ----------------------------------------------------------------
+
+    -- here temporarily
+    function NODE_REP(NODE: TREE) return STRING is
+      NODE_TEXT: PNAME;
+
+      function ITOA(N: INTEGER) return STRING is
+        TXT: constant STRING := INTEGER'IMAGE(N);
+      begin
+        if TXT(1) = ' ' then
+          return TXT(2 .. TXT'LAST);
+	else
+	  return TXT;
+	end if;
+      end ITOA;
+
+    begin -- NODE_REP
+      if NODE.TTY not in 1 .. NODE_NAME'POS(NODE_NAME'LAST)
+      or NODE.TPG < 0 then
+        SET(NODE_TEXT, TO => '{' & ITOA(INTEGER(NODE.TTY)) & '}');
+      else
+        SET(NODE_TEXT, TO => NODE_IMAGE(NODE_NAME'VAL(NODE.TTY)));
+      end if;
+      if NODE.TTY = 0 and NODE.TPG = 0 then
+        return '<' & NODE_TEXT & '>';
+      else
+        return '<' & NODE_TEXT & '.'
+               & ITOA(INTEGER(NODE.TPG)) & '.'
+               & ITOA(INTEGER(NODE.TLN)) & '>';
+      end if;
+    end NODE_REP;
+
+    ----------------------------------------------------------------
+
+    function COPY_NODE(NODE: TREE) return TREE is
+      RESULT: TREE;
+      LENGTH: NATURAL;
+    begin
+      if NODE.TLN = 0 then
+	return NODE;
+      else
+	LENGTH := NATURAL(DABS(0,NODE).TLN);
+	RESULT := MAKE(INTEGER(NODE.TTY), LENGTH);
+	for I in 1 .. LENGTH loop
+	  DABS(I, RESULT, DABS(I, NODE));
+	end loop;
+	return RESULT;
+      end if;
+    end COPY_NODE;
+
+    ----------------------------------------------------------------
+
+    procedure FIND_SELECTED_DEFS
+		( NAME_TYPESET: 	in out TYPESET_TYPE
+		; DESIGNATOR:		TREE
+		; DEFSET:		out DEFSET_TYPE )
+    is
+	-- given a list of types and a designator, find those
+	-- defs for the designator such that selected is valid expression
+
+	DESIGNATOR_DEFLIST:	constant SEQ_TYPE
+		:= LIST(D(LX_SYMREP, DESIGNATOR));
+	TEMP_NAME_TYPESET:	TYPESET_TYPE := NAME_TYPESET;
+	NAME_TYPEINTERP:	TYPEINTERP_TYPE;
+	NAME_STRUCT: 		TREE;
+	NAME_TYPE_ID:		TREE;
+	NAME_DEF:		TREE;
+
+	TEMP_DEFLIST:		SEQ_TYPE;
+	TEMP_DEF:		TREE;
+
+	NEW_TYPESET: TYPESET_TYPE := EMPTY_TYPESET;
+	NEW_DEFSET: DEFSET_TYPE := EMPTY_DEFSET; 
+    begin
+
+	-- for each possible name type
+	while not IS_EMPTY(TEMP_NAME_TYPESET) loop
+	    POP(TEMP_NAME_TYPESET, NAME_TYPEINTERP);
+	    NAME_STRUCT := GET_BASE_STRUCT(GET_TYPE(NAME_TYPEINTERP));
+
+	    -- if access type, consider designated type
+	    if KIND(NAME_STRUCT) = DN_ACCESS then
+		NAME_STRUCT := GET_BASE_STRUCT(D(SM_DESIG_TYPE,NAME_STRUCT));
+	    end if;
+
+	    -- if it is record or task type
+	    if KIND(NAME_STRUCT) = DN_RECORD
+	    or KIND(NAME_STRUCT) = DN_TASK_SPEC
+	    or KIND(NAME_STRUCT) in CLASS_PRIVATE_SPEC then
+
+		-- get region def
+		NAME_TYPE_ID := D(XD_SOURCE_NAME, NAME_STRUCT);
+		if KIND(NAME_TYPE_ID) = DN_TYPE_ID then
+		    NAME_TYPE_ID := D(SM_FIRST, NAME_TYPE_ID);
+		end if;
+		NAME_DEF := GET_DEF_FOR_ID(NAME_TYPE_ID);
+
+		-- search deflist for components or entries in that region
+		TEMP_DEFLIST := DESIGNATOR_DEFLIST;
+	        while not IS_EMPTY(TEMP_DEFLIST) loop
+		    POP(TEMP_DEFLIST, TEMP_DEF);
+		    if NAME_DEF = D(XD_REGION_DEF, TEMP_DEF) then
+			if KIND(D(XD_HEADER,TEMP_DEF)) in CLASS_BOOLEAN then
+			    -- in error, return this one and quit looking
+			    NEW_DEFSET := EMPTY_DEFSET;
+			    ADD_TO_DEFSET(NEW_DEFSET, TEMP_DEF);
+			    DEFSET := NEW_DEFSET;
+		 	    NAME_TYPESET := EMPTY_TYPESET;
+			    return;
+			end if;
+			ADD_TO_TYPESET(NEW_TYPESET, NAME_TYPEINTERP);
+		 	ADD_TO_DEFSET
+			    	( NEW_DEFSET
+				, TEMP_DEF
+				, GET_EXTRAINFO(NAME_TYPEINTERP) );
+		    end if;
+		end loop;
+	
+	-- return new sets
+	    end if;
+	end loop;
+	NAME_TYPESET := NEW_TYPESET;
+	DEFSET := NEW_DEFSET;
+
+    end FIND_SELECTED_DEFS;
+
+    ----------------------------------------------------------------
+
+    procedure INIT_PARAM_CURSOR
+		( CURSOR:		out PARAM_CURSOR_TYPE
+		; PARAM_LIST:		SEQ_TYPE)
+    is
+    begin
+	CURSOR.PARAM_LIST := PARAM_LIST;
+	CURSOR.ID_LIST := MAKE;
+    end INIT_PARAM_CURSOR;
+
+    ----------------------------------------------------------------
+
+    procedure ADVANCE_PARAM_CURSOR (CURSOR: in out PARAM_CURSOR_TYPE) is
+    begin
+	if IS_EMPTY(CURSOR.ID_LIST) then
+	    if IS_EMPTY(CURSOR.PARAM_LIST) then
+		CURSOR.ID := CONST_VOID;
+		return;
+	    else
+		POP(CURSOR.PARAM_LIST, CURSOR.PARAM);
+		if KIND(CURSOR.PARAM) = DN_NULL_COMP_DECL then
+		    CURSOR.ID := CONST_VOID;
+		    return;
+		end if;
+		CURSOR.ID_LIST := LIST(D(AS_SOURCE_NAME_S, CURSOR.PARAM));
+	    end if;
+	end if;
+	POP(CURSOR.ID_LIST, CURSOR.ID);
+    end ADVANCE_PARAM_CURSOR;
+
+end VISUTIL;

@@ -1,0 +1,25 @@
+with USERPK, DIANA, DIANATTR, DIANAMAN;
+use  USERPK, DIANA, DIANATTR, DIANAMAN;
+package UNITLOD is
+
+  -- Functions to load units from library
+  -- Return void if unit does not exist (or is obsolete)
+  -- Forward references: attributes xd_stub and xd_body
+  --    point to declaration of the unit body or body stub
+  function LOAD_LIBRARY_SPEC(LIB_NAME: STRING) return TREE;
+  function LOAD_LIBRARY_BODY(LIB_NAME: STRING) return TREE;
+  function LOAD_LIBRARY_SUBUNIT(LIB_NAME, SUB_NAME: STRING) return TREE;
+
+  -- Same as above, with arguments as symbol_rep's or txtrep's
+  function LOAD_LIBRARY_SPEC(LIB_SYM: TREE) return TREE;
+  function LOAD_LIBRARY_BODY(LIB_SYM: TREE) return TREE;
+  function LOAD_LIBRARY_SUBUNIT(LIB_SYM, SUB_SYM: TREE) return TREE;
+
+  -- Returns list of units loaded by calls to unitload
+  function UNITS_LOADED return SEQ_TYPE;
+
+  -- Returns list of units loaded by calls to unit load and
+  -- transitively with'ed units.  Note: _STANDRD is first on list.
+  function UNITS_LOADED_AND_WITHED return SEQ_TYPE;
+
+end UNITLOD;

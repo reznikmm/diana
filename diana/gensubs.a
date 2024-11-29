@@ -1,0 +1,424 @@
+with DIANA, DIANATTR, DIANAMAN; use DIANA, DIANAMAN, DIANATTR;
+with DIANATBL; use DIANATBL;
+with NEWSNAM; use NEWSNAM;
+with visutil; use visutil; -- for copy_node
+with prefcns; use prefcns;
+
+package body GENSUBS is
+
+    procedure SUBSTITUTE_GENERAL_NODE
+		( NODE: 	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE
+		; H:		H_TYPE );
+
+    function HASH_NODE_HASH
+		( NODE_HASH:	NODE_HASH_TYPE
+		; NODE: 	TREE )
+	    return NATURAL;
+
+    procedure SEARCH_NODE_HASH
+		( NODE_HASH:	in out NODE_HASH_TYPE
+		; NODE:		in out TREE );
+
+
+    procedure REPLACE_NODE
+		( NODE: 	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE )
+    is
+	OLD_NODE: constant TREE := NODE;
+    begin
+	NODE := COPY_NODE(NODE);
+	INSERT_NODE_HASH(NODE_HASH, NODE, OLD_NODE);
+    end REPLACE_NODE;
+
+
+    procedure SUBSTITUTE_GENERAL_NODE
+		( NODE: 	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE
+		; H:		H_TYPE )
+    is
+	use DIANATBL;
+
+	OLD_NODE: constant TREE := NODE;
+	OLD_ATTRIBUTE: TREE;
+	ATTRIBUTE: TREE;
+    begin
+
+	-- for each attribute of the given node
+	for I in 1 .. N_SPEC(INTEGER(NODE.TTY)).NS_SIZE loop
+	    ATTRIBUTE := DABS(I, NODE);
+	    OLD_ATTRIBUTE := ATTRIBUTE;
+
+	    -- substitute for it
+	    SUBSTITUTE(ATTRIBUTE, NODE_HASH, H);
+
+	    -- if it was changed by the substitution
+	    if ATTRIBUTE /= OLD_ATTRIBUTE then
+
+		-- if this is the first change
+		if NODE = OLD_NODE then
+
+		    -- create a new node
+		    NODE := COPY_NODE(NODE);
+		end if;
+
+		-- replace the changed attribute
+		DABS(I, NODE, ATTRIBUTE);
+	    end if;
+	end loop;
+    end SUBSTITUTE_GENERAL_NODE;
+
+
+    procedure SUBSTITUTE_ATTRIBUTES
+		( NODE: 	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE
+		; H_IN: 	H_TYPE )
+    is
+	use DIANATBL;
+	H: H_TYPE renames H_IN;
+
+	OLD_ATTRIBUTE: TREE;
+	ATTRIBUTE: TREE;
+    begin
+
+	-- for each attribute of the given node
+	for I in 1 .. N_SPEC(INTEGER(NODE.TTY)).NS_SIZE loop
+	    ATTRIBUTE := DABS(I, NODE);
+	    OLD_ATTRIBUTE := ATTRIBUTE;
+
+	    -- substitute for it
+	    SUBSTITUTE(ATTRIBUTE, NODE_HASH, H);
+
+	    -- if it was changed by the substitution
+	    if ATTRIBUTE /= OLD_ATTRIBUTE then
+
+		-- replace the changed attribute
+		DABS(I, NODE, ATTRIBUTE);
+	    end if;
+	end loop;
+    end SUBSTITUTE_ATTRIBUTES;
+
+
+    procedure SUBSTITUTE
+		( NODE: 	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE
+		; H_IN: 	H_TYPE )
+    is
+	OLD_NODE: constant TREE := NODE;
+	H: H_TYPE renames H_IN;
+    begin
+
+	-- $$$$ for testing -- avoid runaway substitution
+	if node_hash.limit > 0 then
+	    node_hash.limit := node_hash.limit - 1;
+	else
+	    quit("Runaway loop in generic substitution");
+	end if;
+
+	-- check for node with no attributes
+	if NODE.TPG <= 0 or else NODE.TLN = 0 then
+	    return;
+	end if;
+
+
+	-- if node has already been considered
+	SEARCH_NODE_HASH(NODE_HASH, NODE);
+
+	-- if it was actually changed
+	if NODE /= OLD_NODE then
+
+	    -- return result from hash table
+	    return;
+	end if;
+
+
+	case KIND(NODE) is
+
+	when DN_ROOT =>
+            QUIT("Invalid node in generic copy");
+
+	when DN_TXTREP | DN_NUM_VAL =>
+	    null;
+
+	when CLASS_BOOLEAN | DN_NIL =>
+            QUIT("Invalid node in generic copy");
+
+	when DN_LIST =>
+
+	    -- substitute for the head and tail
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+	when DN_SOURCELINE | DN_ERROR =>
+            QUIT("Invalid node in generic copy");
+
+	when DN_SYMBOL_REP =>
+	    null;
+
+	when DN_HASH | DN_VOID =>
+            QUIT("Invalid node in generic copy");
+
+
+	when CLASS_DEF_NAME =>
+	    -- (only substituted if found in hash table)
+	    null;
+
+
+	when DN_BLOCK_MASTER =>
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when CLASS_DSCRMT_PARAM_DECL | DN_NUMBER_DECL | DN_EXCEPTION_DECL
+		| DN_DEFERRED_CONSTANT_DECL =>
+	    declare
+		SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+		SOURCE_NAME_LIST: SEQ_TYPE := LIST(SOURCE_NAME_S);
+		SOURCE_NAME: TREE;
+	    begin
+		while not IS_EMPTY(SOURCE_NAME_LIST) loop
+		    POP(SOURCE_NAME_LIST, SOURCE_NAME);
+
+		    REPLACE_SOURCE_NAME(SOURCE_NAME, NODE_HASH, H, NODE);
+		end loop;
+
+		SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+	    end;
+
+
+	when CLASS_OBJECT_DECL =>
+	    declare
+		SOURCE_NAME_S: TREE := D(AS_SOURCE_NAME_S, NODE);
+		SOURCE_NAME_LIST: SEQ_TYPE := LIST(SOURCE_NAME_S);
+		SOURCE_NAME: TREE;
+		TYPE_DEF_KIND: NODE_NAME := KIND(D(AS_TYPE_DEF, NODE));
+	    begin
+		while not IS_EMPTY(SOURCE_NAME_LIST) loop
+		    POP(SOURCE_NAME_LIST, SOURCE_NAME);
+
+		    REPLACE_SOURCE_NAME(SOURCE_NAME, NODE_HASH, H, NODE);
+		    if TYPE_DEF_KIND = DN_CONSTRAINED_ARRAY_DEF then
+			GEN_PREDEFINED_OPERATORS
+				( D(SM_OBJ_TYPE, SOURCE_NAME), H);
+		    end if;
+		end loop;
+
+		SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+	    end;
+
+
+	when DN_TYPE_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+		DERIVED_ID_LIST: SEQ_TYPE;
+		DERIVED_ID: TREE;
+	    begin
+		REPLACE_SOURCE_NAME(SOURCE_NAME, NODE_HASH, H, NODE);
+		GEN_PREDEFINED_OPERATORS
+		    ( D(SM_TYPE_SPEC, SOURCE_NAME), H);
+		if KIND(D(AS_TYPE_DEF, NODE)) = DN_DERIVED_DEF then
+		    DERIVED_ID_LIST := LIST(D(AS_TYPE_DEF, NODE));
+		    while not IS_EMPTY(DERIVED_ID_LIST) loop
+			POP(DERIVED_ID_LIST, DERIVED_ID);
+			REPLACE_SOURCE_NAME(DERIVED_ID, NODE_HASH, H);
+		    end loop;
+		end if;
+		SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+	    end;
+
+
+	when DN_SUBTYPE_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+	    begin
+		REPLACE_SOURCE_NAME(SOURCE_NAME, NODE_HASH, H);
+		SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+	    end;
+
+
+	when DN_TASK_DECL | CLASS_SIMPLE_RENAME_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+	    begin
+		REPLACE_SOURCE_NAME(SOURCE_NAME, NODE_HASH, H, NODE);
+		SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+	    end;
+
+
+	when CLASS_UNIT_DECL =>
+	    declare
+		SOURCE_NAME: TREE := D(AS_SOURCE_NAME, NODE);
+	    begin
+		REPLACE_SOURCE_NAME(SOURCE_NAME, NODE_HASH, H, NODE);
+		SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+	    end;
+
+
+	when DN_NULL_COMP_DECL =>
+	    null;
+
+
+	when CLASS_NAMED_REP | DN_RECORD_REP | DN_USE =>
+	    -- $$$$ worry about forward refs to address clauses
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when DN_PRAGMA =>
+	    declare
+		USED_NAME_ID: TREE := D(AS_USED_NAME_ID, NODE);
+	    begin
+		USED_NAME_ID := COPY_NODE(USED_NAME_ID);
+		if D(SM_DEFN, USED_NAME_ID) /= CONST_VOID then
+		    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+		end if;
+	    end;
+
+
+	when DN_SUBPROGRAM_BODY | DN_PACKAGE_BODY | DN_TASK_BODY | DN_SUBUNIT =>
+            QUIT("Invalid node in generic copy");
+
+
+	when CLASS_TYPE_DEF =>
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when CLASS_SEQUENCES =>
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when CLASS_STM_ELEM =>
+            QUIT("Invalid node in generic copy");
+
+
+	when CLASS_NAMED_ASSOC =>
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when CLASS_USED_OBJECT =>
+	    declare
+		OLD_DEFN: constant TREE := D(SM_DEFN, NODE);
+		DEFN: TREE := OLD_DEFN;
+		EXP_TYPE: TREE := D(SM_EXP_TYPE, NODE);
+	    begin
+		SUBSTITUTE(DEFN, NODE_HASH, H);
+		if DEFN /= OLD_DEFN then
+		    SUBSTITUTE(EXP_TYPE, NODE_HASH, H);
+		    NODE := COPY_NODE(NODE);
+		    D(SM_DEFN, NODE, DEFN);
+		    D(SM_EXP_TYPE, NODE, EXP_TYPE);
+		end if;
+	    end;
+
+
+	when CLASS_USED_NAME | CLASS_NAME_EXP | CLASS_EXP_EXP
+		| CLASS_CONSTRAINT | CLASS_CHOICE
+		| CLASS_HEADER | CLASS_UNIT_DESC
+		| CLASS_MEMBERSHIP_OP | CLASS_SHORT_CIRCUIT_OP =>
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when CLASS_TEST_CLAUSE_ELEM
+	        | CLASS_ITERATION | CLASS_ALTERNATIVE_ELEM =>
+            QUIT("Invalid node in generic copy");
+
+
+	when CLASS_COMP_REP_ELEM =>
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when CLASS_CONTEXT_ELEM =>
+            QUIT("Invalid node in generic copy");
+
+
+	when CLASS_VARIANT_ELEM | DN_ALIGNMENT | DN_VARIANT_PART
+		| DN_COMP_LIST =>
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when DN_COMPILATION | DN_COMPILATION_UNIT =>
+            QUIT("Invalid node in generic copy");
+
+
+	when DN_INDEX =>
+	    SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+
+
+	when DN_TASK_SPEC =>
+	    null;
+
+
+	when CLASS_NON_TASK =>
+	    if D(SM_BASE_TYPE, NODE) /= NODE then
+		SUBSTITUTE_GENERAL_NODE(NODE, NODE_HASH, H);
+	    else
+		null;
+	    end if;
+
+
+	when CLASS_PRIVATE_SPEC | DN_INCOMPLETE =>
+	    null;
+
+
+	when DN_REAL_VAL =>
+	    null;
+
+
+	when DN_UNIVERSAL_INTEGER | DN_UNIVERSAL_FIXED | DN_UNIVERSAL_REAL
+		| DN_USER_ROOT | DN_TRANS_WITH .. DN_NULLARY_CALL =>
+            QUIT("Invalid node in generic copy");
+
+	end case;
+
+
+	-- if a change was made
+	if NODE /= OLD_NODE then
+
+	   -- enter change in hash table
+	   INSERT_NODE_HASH(NODE_HASH, NODE, OLD_NODE);
+	end if;
+    end;
+
+
+    function HASH_NODE_HASH
+		( NODE_HASH:	NODE_HASH_TYPE
+		; NODE: 	TREE )
+	    return NATURAL
+    is
+	HASH_CODE: NATURAL := abs(INTEGER(NODE.TPG) - 79 * INTEGER(NODE.TLN));
+    begin
+        HASH_CODE := HASH_CODE mod NODE_HASH.A'LENGTH;
+	return HASH_CODE;
+    end HASH_NODE_HASH;
+
+
+    procedure INSERT_NODE_HASH
+		( NODE_HASH:	in out NODE_HASH_TYPE
+		; NEW_NODE:	TREE
+		; OLD_NODE:	TREE )
+    is
+	HASH_INDEX: NATURAL := HASH_NODE_HASH (NODE_HASH, OLD_NODE);
+	HASH_CHAIN: TREE := NODE_HASH.A(HASH_INDEX);
+	NEW_HASH_CHAIN: TREE := MAKE(DN_LIB_INFO);
+    begin
+	D(XD_SHORT, NEW_HASH_CHAIN, HASH_CHAIN);
+	D(XD_PRIMARY, NEW_HASH_CHAIN, OLD_NODE);
+	D(XD_SECONDARY, NEW_HASH_CHAIN, NEW_NODE);
+	NODE_HASH.A(HASH_INDEX) := NEW_HASH_CHAIN;
+    end INSERT_NODE_HASH;
+
+
+    procedure SEARCH_NODE_HASH
+		( NODE_HASH:	in out NODE_HASH_TYPE
+		; NODE:		in out TREE )
+    is
+	HASH_INDEX: NATURAL := HASH_NODE_HASH (NODE_HASH, NODE);
+	HASH_CHAIN: TREE := NODE_HASH.A(HASH_INDEX);
+    begin
+	while HASH_CHAIN /= CONST_VOID loop
+	    if D(XD_PRIMARY, HASH_CHAIN) = NODE then
+		NODE := D(XD_SECONDARY, HASH_CHAIN);
+		exit;
+	    end if;
+	    HASH_CHAIN := D(XD_SHORT, HASH_CHAIN);
+	end loop;
+    end SEARCH_NODE_HASH;
+
+end GENSUBS;

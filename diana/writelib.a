@@ -1,0 +1,236 @@
+with TEXT2_IO, USERPK, DIANA, DIANATTR, DIANAMAN, PAGEMAN;
+use  TEXT2_IO, USERPK, DIANA, DIANATTR, DIANAMAN, PAGEMAN;
+with SEQUENTIAL_IO;
+procedure WRITELIB is
+
+  CONST_VIRGIN: TREE;
+  ZERO_BYTE:	BYTE := BYTE(0);
+
+  procedure MAIN;
+  procedure GET_LIB_PREFIX;
+  procedure WRITE_UNIT(COMP_UNIT_ARG: TREE);
+  procedure MARK_WITHED_UNIT_PAGES (COMP_UNIT: TREE);
+  function RELOCATE(T: TREE) return TREE;
+
+  IS_OK_PAGE:	    array (1 .. MAX_VPG) of BOOLEAN;
+  NEW_UNIT_SEQ:     SEQ_TYPE; -- := MAKE;
+  LIB_PREFIX:	    PNAME;
+
+--@procedure PUT_TREE(T: TREE) is
+--@begin
+--@ PUT(T.TPG,0);PUT('.');PUT(INTEGER(T.TTY),0);PUT('.');
+--@ PUT(INTEGER(T.TLN),0);PUT(' ');
+--@end PUT_TREE;
+
+  procedure MAIN is
+    USER_ROOT:	    TREE := D(XD_USER_ROOT, CONST_ROOT);
+    COMPILATION:    TREE := D(XD_STRUCTURE,USER_ROOT);
+    COMP_UNIT_SEQ:  SEQ_TYPE := LIST(D(AS_COMPLTN_UNIT_S, COMPILATION));
+    COMP_UNIT:	    TREE;
+  begin
+    -- get prefix for unit names
+    GET_LIB_PREFIX;
+    -- Write each comp unit
+    while not IS_EMPTY(COMP_UNIT_SEQ) loop
+      COMP_UNIT := HEAD(COMP_UNIT_SEQ); COMP_UNIT_SEQ := TAIL(COMP_UNIT_SEQ);
+      if KIND(D(AS_ALL_DECL,COMP_UNIT)) = DN_VOID then
+	-- Pragma only unit not changed to "SYSTEM" -- nothing to write
+	NEW_UNIT_SEQ := APPEND(NEW_UNIT_SEQ, COMP_UNIT);
+      else
+	MARK_WITHED_UNIT_PAGES(COMP_UNIT); -- marks withed pages ok
+	NEW_BLOCK; -- force a new block
+	WRITE_UNIT(COMP_UNIT); -- puts moved unit on new_unit_seq
+
+    -- Stick relocated list in compilation
+      end if;
+    end loop;
+    LIST(D(AS_COMPLTN_UNIT_S, COMPILATION), NEW_UNIT_SEQ);
+  end MAIN;
+
+
+  procedure GET_LIB_PREFIX is
+    TEXT: STRING(1..MAX_STRING);
+    LAST: INTEGER := 0;
+    LIB_CTRL: TEXT2_IO.FILE_TYPE;
+    LIB_CHAR: CHARACTER;
+  begin
+    OPEN(LIB_CTRL, IN_FILE, "ADA__LIB.CTL");
+    GET(LIB_CTRL, LIB_CHAR);
+    if LIB_CHAR = 'P' then
+        GET(LIB_CTRL, LIB_CHAR);
+        GET_LINE(LIB_CTRL, TEXT, LAST);
+    end if;
+    SET(LIB_PREFIX, TO => TEXT(1..LAST));
+    CLOSE(LIB_CTRL);
+  end;
+
+
+  procedure WRITE_UNIT(COMP_UNIT_ARG: TREE) is
+    package SEQ_IO is new SEQUENTIAL_IO(SECTOR);
+
+    COMP_UNIT:		TREE;
+    FIRST_PAGE: 	INTEGER;
+    NBR_PAGES:		INTEGER;
+    POINTER:		TREE;
+    LIB_FILE:		SEQ_IO.FILE_TYPE;
+    DUMMY:		TREE;
+  begin
+    COMP_UNIT := RELOCATE(COMP_UNIT_ARG);
+    FIRST_PAGE := INTEGER(COMP_UNIT.TPG);
+    NBR_PAGES := LAST_BLOCK - FIRST_PAGE + 1;
+    POINTER := MAKE_TREE(FIRST_PAGE,0,1);
+
+    DI(XD_NBR_PAGES, COMP_UNIT, NBR_PAGES);
+
+    SEQ_IO.CREATE (LIB_FILE, SEQ_IO.OUT_FILE,
+	  LIB_PREFIX & PRINTNAME(D(XD_LIB_NAME,COMP_UNIT)));
+    for I in 1 .. NBR_PAGES loop
+      DUMMY := DABS(0, POINTER);
+      SEQ_IO.WRITE (LIB_FILE, RPG(VPG(INTEGER(POINTER.TPG)).RP).DATA.all);
+      POINTER.TPG := POINTER.TPG + 1;
+    end loop;
+    SEQ_IO.CLOSE(LIB_FILE);
+
+    NEW_UNIT_SEQ := APPEND(NEW_UNIT_SEQ, COMP_UNIT);
+  end WRITE_UNIT;
+
+  procedure MARK_WITHED_UNIT_PAGES (COMP_UNIT: TREE) is
+--@ PRIOR:		BOOLEAN := FALSE;
+    TRANS_WITH_SEQ:	SEQ_TYPE := LIST(COMP_UNIT);
+    TRANS_WITH: 	TREE;
+    WITHED_UNIT:	TREE;
+    FIRST_PAGE: 	INTEGER;
+    NBR_PAGES:		INTEGER;
+    HIGH_BLOCK: 	INTEGER;
+    WORD_ZERO:		TREE;
+  begin
+    -- Initialize ok-block table
+    HIGH_BLOCK := LAST_BLOCK;
+    for I in 1 .. HIGH_BLOCK loop
+      IS_OK_PAGE(I) := FALSE;
+    end loop;
+    for I in HIGH_BLOCK + 1 .. MAX_VPG loop
+      IS_OK_PAGE(I) := TRUE;
+    end loop;
+
+    while not IS_EMPTY(TRANS_WITH_SEQ) loop
+      TRANS_WITH := HEAD(TRANS_WITH_SEQ);
+      TRANS_WITH_SEQ := TAIL(TRANS_WITH_SEQ);
+
+      WITHED_UNIT := D(TW_COMP_UNIT, TRANS_WITH);
+      -- relocate this pointer, if necessary
+      loop
+	WORD_ZERO := DABS(0,WITHED_UNIT);
+	exit
+	  when WORD_ZERO.TPG >= 0;
+	WITHED_UNIT := WORD_ZERO;
+	WITHED_UNIT.TPG := - WITHED_UNIT.TPG;
+      end loop;
+      FIRST_PAGE := INTEGER(WITHED_UNIT.TPG);
+      NBR_PAGES := DI(XD_NBR_PAGES, WITHED_UNIT);
+--@   PUT("F,N=");PUT(FIRST_PAGE,4);PUT(NBR_PAGES,5);NEW_LINE;
+      for I in FIRST_PAGE .. FIRST_PAGE + NBR_PAGES - 1 loop
+	IS_OK_PAGE(I) := TRUE;
+      end loop;
+    end loop;
+
+--@ PUT_LINE("--------------PAGE MAP:");
+--@ for I in 1 .. MAX_VPG loop
+--@   if IS_OK_PAGE(I) /= PRIOR then
+--@     PUT(I,4);PUT(' ');PUT(BOOLEAN'POS(IS_OK_PAGE(I)));NEW_LINE;
+--@	PRIOR := IS_OK_PAGE(I);
+--@   end if;
+--@ end loop;
+--@ PUT_LINE("--------------");
+  end MARK_WITHED_UNIT_PAGES;
+
+  function RELOCATE(T: TREE) return TREE is
+    TEMP:	TREE;
+    WORD_ZERO:	TREE;
+    LENGTH:	POSITIVE;
+    K:		NODE_NAME;
+    DUMMY:	TREE;
+  begin
+    if T.TLN = ZERO_BYTE then
+      return T;
+    elsif T.TPG < 0 then
+      if T = CONST_VIRGIN then
+	return T;
+      else
+--@	PUT("SOURCE_POSITION ");PUT_TREE(T);NEW_LINE;
+	return MAKE_SOURCE_POSITION
+	      ( RELOCATE(GET_SOURCE_LINE(T)), GET_SOURCE_COL(T) );
+      end if;
+    elsif KIND(T) = DN_SYMBOL_REP then
+--@   PUT("SYMBOL_REP ");PUT_TREE(T);NEW_LINE;
+      return RELOCATE(D(XD_TEXT,T));
+    elsif IS_OK_PAGE(INTEGER(T.TPG)) then
+--@   PUT("OK ");PUT_TREE(T);PUT_LINE(NODE_IMAGE(KIND(T)));
+      return T;
+    else -- a node to be relocated
+      -- clear forward references
+      case KIND(T) is
+      when Class_NON_TASK_NAME | DN_TASK_SPEC =>	
+	d(xd_stub, T, const_void);
+	d(xd_body, T, const_void);
+      when DN_INCOMPLETE =>
+	d(xd_full_type_spec, T, const_void);
+      when others =>	
+	null;
+      end case;	
+      WORD_ZERO := DABS(0,T);
+--@   PUT_TREE(T);PUT(NODE_IMAGE(KIND(T)));PUT(' ');PUT_TREE(WORD_ZERO);
+      if WORD_ZERO.TPG < 0 then
+	WORD_ZERO.TPG := - WORD_ZERO.TPG;
+	if IS_OK_PAGE(INTEGER(WORD_ZERO.TPG)) then
+--@       PUT(' ');PUT_TREE(WORD_ZERO);NEW_LINE;
+	  return WORD_ZERO;
+	else
+	  -- Note. here for, e.g., txtrep that has been moved but
+	  -- is not in unit transitively withed by the current one
+--@	  PUT_LINE("--reloc again--");
+	  return RELOCATE(WORD_ZERO);
+	end if;
+      else
+	-- make new node
+	LENGTH := INTEGER(WORD_ZERO.TLN);
+	TEMP := MAKE(INTEGER(T.TTY), LENGTH);
+--@     PUT(' ');PUT_TREE(TEMP);NEW_LINE;
+	-- write reloc info before copying attributes
+	WORD_ZERO := TEMP;
+	WORD_ZERO.TPG := - WORD_ZERO.TPG;
+	DABS(0, T, WORD_ZERO);
+	-- copy attributes
+	K := KIND(TEMP);
+	if K = DN_TXTREP or K = DN_NUM_VAL then
+	  for I in 1 .. LENGTH loop
+	    DABS(I, TEMP, DABS(I,T));
+	  end loop;
+	else
+	  -- force xd_lib_name on first page of comp_unit
+	  if K = DN_COMPILATION_UNIT then
+	    DUMMY := RELOCATE(D(XD_LIB_NAME,T));
+	  end if;
+	  for I in 1 .. LENGTH loop
+--@	    PUT(I,0);PUT(" in "); PUT_TREE(T); NEW_LINE;
+	    DABS(I, TEMP, RELOCATE(DABS(I,T)));
+	  end loop;
+	end if;
+	return TEMP;
+      end if;
+    end if;
+  end RELOCATE;
+
+begin
+  CONST_VIRGIN.TPG := -1;
+  CONST_VIRGIN.TTY := BYTE(255);
+  CONST_VIRGIN.TLN := BYTE(255);
+  OPEN_DIANA;
+  if DI(XD_ERR_COUNT, CONST_ROOT) > 0 then
+	PUT_LINE("Writelib: not executed");
+  else
+        NEW_UNIT_SEQ := MAKE;
+        MAIN;
+  end if;
+  CLOSE_DIANA;
+end WRITELIB;
