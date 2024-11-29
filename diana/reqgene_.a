@@ -1,0 +1,172 @@
+with USERPK; use USERPK;
+with SETUTIL; use SETUTIL;
+
+-- following with clauses copied from package body; not used in spec
+-- they are placed here so that compilation-order tools will work on this file
+with DIANA, DIANATTR, DIANAMAN;
+
+package REQGENE is
+
+    generic
+	with function IS_XXX (ITEM: TREE) return BOOLEAN;
+	MESSAGE: in STRING;
+    procedure REQ_DEF_XXX(EXP: TREE; DEFSET: in out DEFSET_TYPE);
+
+    generic
+	with function IS_XXX (ITEM: TREE) return BOOLEAN;
+	MESSAGE: in STRING;
+    procedure REQ_TYPE_XXX(EXP: TREE; TYPESET: in out TYPESET_TYPE);
+
+end REQGENE;
+
+--=====================================================================
+
+with DIANA, DIANATTR, DIANAMAN; use DIANA, DIANATTR, DIANAMAN;
+
+package body REQGENE is
+
+    procedure REQ_DEF_XXX(EXP: TREE; DEFSET: in out DEFSET_TYPE) is
+	-- remove from Defset those interpretations for which Is_Xxx false
+
+	function REQUIRE_XXX(DEFSET: DEFSET_TYPE) return DEFSET_TYPE is
+	    -- recursive procedure to return defset with non-Xxx defs removed
+	    -- assumption: never called with empty defset as parameter
+
+	    SET_TAIL:	    DEFSET_TYPE;
+	    SET_HEAD:	    DEFINTERP_TYPE;
+	    NEW_TAIL:	    DEFSET_TYPE;
+	begin
+
+	    -- get head and tail of defset
+	    SET_TAIL := DEFSET;
+	    POP(SET_TAIL, SET_HEAD);
+
+	    -- apply Require_Xxx to tail giving new tail
+	    -- (test suppressed if tail is empty)
+	    if IS_EMPTY(SET_TAIL) then
+		NEW_TAIL := SET_TAIL;
+	    else
+		NEW_TAIL := REQUIRE_XXX(SET_TAIL);
+	    end if;
+
+	    -- if the head of the given defset is to be retained
+	    if IS_XXX(GET_DEF(SET_HEAD)) then
+
+		-- if the tail is unchanged
+		if NEW_TAIL = SET_TAIL then
+
+		    -- return the given defset
+		    -- (this avoids constructing new lists)
+		    return DEFSET;
+
+		-- else -- since tail was changed
+		else
+
+		    -- insert head into new tail and return the result
+		    NEW_TAIL := INSERT(NEW_TAIL, SET_HEAD);
+		    return NEW_TAIL;
+		end if;
+
+	    -- else -- since head is not to be retained
+	    else
+
+		-- return the new tail
+		return NEW_TAIL;
+	    end if;
+
+	end REQUIRE_XXX;
+
+    begin -- Req_Def_Xxx
+
+	-- if argument is empty
+	if IS_EMPTY(DEFSET) then
+
+	    -- return the empty argument
+	    return;
+	end if;
+
+	-- remove elements of defset which do not satisfy Is_Xxx
+	DEFSET := REQUIRE_XXX(DEFSET);
+
+	-- if all elements were removed
+	if IS_EMPTY(DEFSET) then
+
+	    -- put out error message
+	    ERROR(D(LX_SRCPOS,EXP), MESSAGE);
+	end if;
+    end REQ_DEF_XXX;
+
+    ------------------------------------------------------------------------
+
+    procedure REQ_TYPE_XXX(EXP: TREE; TYPESET: in out TYPESET_TYPE) is
+	-- remove from Typeset those interpretations for which Is_Xxx false
+
+	function REQUIRE_XXX(TYPESET: TYPESET_TYPE) return TYPESET_TYPE is
+	    -- recursive procedure to return typeset with non-Xxx types removed
+	    -- assumption: never called with empty typeset as parameter
+
+	    SET_TAIL:	    TYPESET_TYPE;
+	    SET_HEAD:	    TYPEINTERP_TYPE;
+	    NEW_TAIL:	    TYPESET_TYPE;
+	begin
+
+	    -- get head and tail of typeset
+	    SET_TAIL := TYPESET;
+	    POP(SET_TAIL, SET_HEAD);
+
+	    -- apply Require_Xxx to tail giving new tail
+	    -- (test suppressed if tail is empty)
+	    if IS_EMPTY(SET_TAIL) then
+		NEW_TAIL := SET_TAIL;
+	    else
+		NEW_TAIL := REQUIRE_XXX(SET_TAIL);
+	    end if;
+
+	    -- if the head of the given typeset is to be retained
+	    if IS_XXX(GET_TYPE(SET_HEAD)) then
+
+		-- if the tail is unchanged
+		if NEW_TAIL = SET_TAIL then
+
+		    -- return the given typeset
+		    -- (this avoids constructing new lists)
+		    return TYPESET;
+
+		-- else -- since tail was changed
+		else
+
+		    -- insert head into new tail and return the result
+		    NEW_TAIL := INSERT(NEW_TAIL, SET_HEAD);
+		    return NEW_TAIL;
+		end if;
+
+	    -- else -- since head is not to be retained
+	    else
+
+		-- return the new tail
+		return NEW_TAIL;
+	    end if;
+
+	end REQUIRE_XXX;
+
+    begin -- Req_Type_Xxx
+
+	-- if argument is empty
+	if IS_EMPTY(TYPESET) then
+
+	    -- return the empty argument
+	    return;
+	end if;
+
+	-- remove elements of typeset which do not satisfy Is_Xxx
+	TYPESET := REQUIRE_XXX(TYPESET);
+
+	-- if all elements were removed
+	if IS_EMPTY(TYPESET) then
+
+	    -- put out error message
+	    ERROR(D(LX_SRCPOS,EXP), MESSAGE);
+	end if;
+    end REQ_TYPE_XXX;
+
+end REQGENE;

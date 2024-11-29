@@ -1,0 +1,856 @@
+
+			    ADA/DIANA FRONT END
+
+                               USER'S MANUAL
+
+
+
+				 D R A F T
+			       Oct. 6, 1988
+
+
+
+****************************************************************************
+*		DISCLAIMER OF WARRANTY AND LIABILITY			   *
+*   									   *
+*  This is experimental prototype software.  It is provided "as is"        *
+*  without warranty or representation of any kind.  The institute for      *
+*  Defense Analyses (IDA) does not warrant, guarantee, or make any         *
+*  representations regarding this software with respect to correctness,    *
+*  accuracy, reliability, merchantability, fitness for a particular        *
+*  purpose, or otherwise.						   *
+*									   *
+*  Users assume all risks in using this software.,  Neither IDA nor        *
+*  anyone else involved in the creation, production or distribution of     *
+*  this software shall be liable for any damage, injury or loss            *
+*  resulting from its use, whether such damage, injury or loss is          *
+*  characterized as direct, indirect, consequential, incidental,           *
+*  special, or otherwise.						   *
+*									   *
+****************************************************************************
+
+INTRODUCTION
+
+This document describes an Ada front end, that is a system which
+translates Ada into Diana, together with associated tools for use of the
+Diana.
+
+The front end is to be considered a prototype version.	It presently
+converts statically correct Ada to the corresponding Diana representation;
+there is no guarantee that statically incorrect programs will be diagnosed
+as such.  (It is the intention to replace this front end with a
+production-quality version which will also diagnose statically incorrect
+programs.)
+
+The language accepted is the entire Ada language, including library
+support, generics, etc., but not (yet) including any of the Chapter 13
+optional features.  The requirement is that the front end accept the
+ACVC class A and class C tests.
+
+The implementation of Diana uses a software virtual memory, implemented as
+a DIRECT_IO file with fixed-size pages.    Diana nodes are represented as
+pointers into this file; the current implementation of a pointer is a
+record containing a node type, a page number and a location within a
+page.  (Of course, it is strongly recommended that the details of the
+current implementation not be relied upon.)  The definition of the Diana
+is given in IDL form and matches the Intermetrics 1986 draft definition of
+Diana (rather than that published in 1983).  Program access to Diana nodes
+and attributes is given by an Ada packages (actually, three packages) very
+similar to that given in the 1983 Diana specification.
+
+The system includes utilities for processing the IDL specification of
+Diana to produce programs and packages required for using Diana.  It also
+includes a LALR grammar generator (similar in scope to yacc, but
+implemented in Ada and tailored to the present project).  In addition, a
+tool for printing the Diana in an indented format is included.
+
+The system consists of about 35,000 lines of Ada source, probably about 15,000
+Ada statements.  Because of the virtual-memory implementation, there should be
+no arbitrary small limitations due to main memory table sizes.
+
+
+DEFINITION OF DIANA AND THE ADA GRAMMAR
+
+Both the definition of Diana (in IDL form) and the LALR grammar for Ada
+are contained in the file diana.idl.  The file contains the following
+kinds of information:
+
+         On lines beginning with "--"
+	      The RM grammar (and other comments), as given in Diana 86.
+
+         On lines not beginning with "--", "@@" or "++"
+	      The LALR grammar actually used.  Adapted from the LALR
+	      grammer given by Fisher and Charles in Ada Letters.  Note
+	      that terminals and non-terminals consist of strings of
+              printable characters other than ' '; terminals are listed
+	      at the beginning of the grammar and other such symbols are
+	      non-terminals.  The semantic information for each rule is
+              given, following the rule, beginning with "====>" and
+	      ending with the end of the line.	The semantic information
+	      consists of instructions for building an abstract syntax
+	      tree; the details probably do not matter to a user of the
+	      front end.
+
+         On lines beginning with "@@"
+	      The IDL definition of Diana, taken from the Diana 86 draft.
+
+         On lines beginning with "++"
+	      Attributes for nodes which are inherited from classes
+	      containing the node.  (These are machine-generated and are
+	      for the convenience of the human reader.)
+
+Note that the RM grammar and the specification of Diana are from the Diana
+86 draft.  They were typed in manually, as a machine-readable copy was not
+available.  (Does anyone know where there is a machine readable copy of
+Diana 86?)
+
+There are a few additional attributes and nodes, not taken from Diana 86.
+The nodes are used in the front end.  Those which are part of the
+implementation of Diana are given before the "real" diana nodes and are in
+the class STANDARD_IDL.    Those which are used internally by the front end
+are given after the "real" diana and are in the class NON_DIANA.    Nodes in
+the classes ALL_SOURCE and TYPE_SPEC are precisely those in Diana 86.
+
+Additional attributes begin with "xd_" or "tw_"; "real" Diana attributes,
+as in Diana 86, begin with "lx_", "as_", "sm_" or "cd_".  It is recommended
+that the additional attributes not be used, as they will probably be
+eliminated, except in cases of necessity.
+
+
+
+REPRESENTATION OF DIANA NODES AND ATTRIBUTES
+
+Conceptually, the Diana is represented by means of a record for each node
+containing, as its fields, the attributes of the node.	The present
+implementation makes use of a large virtual memory implemented in
+software.  (Large means up to 2**15 pages of 512 bytes, at present; an
+increase to, say, 2**23 pages is not very difficult.)  Pages of virtual
+memory are allocated, and then nodes are allocated within them.  A node
+consists of a 32-bit control word containing the node type and the number
+of attributes which follow; a pointer to a node consists of a record of
+type TREE (defined in package USERPK) with three fields, the number of a
+virtual page (16 bits), the type of the node pointed to (8 bits) and the
+line number or position within the virtual page.  The page may be thought
+of as an array, array (1..127) of TREE; the page number is then the
+subscript corresponding to the array element which holds the node's
+control word.
+
+Thus, a pointer and the node pointed to have the following structure:
+
+
+    |---------|----|----|	 |---------|----|----|
+    | virt-pg |type|line|  ----> |  type   |	n    |
+    |---------|----|----|	 |---------|---------|
+				 |   attribute 1     |
+	  (pointer)		 |-------------------|
+				 |   attribute 2     |
+				 |-------------------|
+				 .		     .
+				 .		     .
+				 |-------------------|
+				 |   attribute n     |
+				 |-------------------|
+
+				   (node pointed to)
+
+
+Pointers which correspond to types other than TREE or which correspond to
+nodes with no attributes have special formats:
+
+Pointer to a node with no attributes:
+
+	      |---------|----|----|    Page and line both 0
+	      |    0	|type|	0 |    y=type /= num_rep
+	      |---------|----|----|
+
+An integer in the range -32768 .. 32767:
+
+	      |---------|----|----|    ** type = num_rep
+	      |  value	| ** |	0 |
+	      |---------|----|----|
+
+An integer outside the range -32768 .. 32767
+
+    |---------|----|----|	 |---------|----|----|
+    | virt-pg | ** |line|  ----> |   **    |	n    |	 d_1 .. d_2n are
+    |---------|----|----|        |---------|---------|   10_000'ary digits
+				 |  d_2n   | d_(2n-1)|
+	  (pointer)		 |-------------------|	 10_000 added to
+				 | d_(2n-2)| d_(2n-3)|	     d_2n for negative
+      ** type = num_rep 	 |-------------------|
+				 .		     .
+				 .		     .	 (Allows for up to
+				 |-------------------|	 500 digits
+				 |   d_2  |   d_1    |	     precision.)
+				 |-------------------|
+
+				   (node pointed to)
+
+A universal real (i.e. rational) number is represented by a real_val node
+whose attributes are the numerator and denominator reduced to lowest terms.
+
+    |---------|----|----|	 |---------|----|----|
+    | virt-pg | ** |line|  ----> |   **    |	2    |
+    |---------|----|----|	 |---------|---------|
+				 |num_val (numerator)|
+       ** type = real_val	 |-------------------|
+                                 |num_val (denomin'r)|
+				 |-------------------|
+
+
+Text, as in lx_symrep and lx_numrep attributes, is represented either by a
+node of type txtrep or a node of type symbol_rep.    A txtrep contains the
+actual text; a symbol_rep contains a (pointer to a) txtrep and an
+additional attribute which is a list (of definitions).	If two text
+attributes are represented by symbol_rep's and are textually the same,
+they are guaranteed to be represented by the same symbol_rep node.
+(Normally, symbol_rep nodes are used; however, txtrep nodes are used when
+the Diana is written out into Ada library files and may be used internally
+when identical representation for identical text is not required.)
+
+    |---------|---------|	 |---------|----|----|
+    |	**    |    2	|   +--> |  txtrep |	n    | ln is string length
+    |---------|---------|   |	 |---------|---------|
+    |  symbol_rep pntr	|---+	 | ln | c1 | c2 | c3 | n*4-4 <= ln < n*4
+    |-------------------|	 |-------------------|
+    |  head of list     |        | c3 | c4 | c5 | c6 | (0 - 3 null char's
+    |-------------------|	 |-------------------| following text)
+				 .		     .
+      ** type = symbol_rep	   .		       .
+				 |-------------------|
+       (symbol_rep)		 |   ...   |c-ln|... |
+				 |-------------------|
+
+				      (txtrep)
+
+Lists are represented in one of the following three ways:
+
+    |-------------------|   |-------------------|   |-------------------|
+    |	 0    |nil | 0	|   |	pntr to head	|   |  page   |list|line|
+    |-------------------|   |-------------------|   |-------------------|
+							      |
+	( empty list )		( one member)		      |
+							      V
+						    |-------------------|
+						    |	list  |    2	|
+	       (Note that list with one member	    |-------------------|
+		is represented by the member)	    |	 pntr to head	|
+						    |-------------------|
+	       (Node of type list used for	    |	 pntr to tail	|
+		lists of more than one member)	    |-------------------|
+
+						   ( more than one member)
+
+Source positions are represented by a special pointer which encodes both
+the line and the column.  (Currently, file is not represented; front end
+produces messages only for the current file.)
+
+	      |---------|----|----|  col is column number;
+	      | -(page) |col |line|  line represented by
+	      |---------|----|----|  sourceline node at
+				     (page,line).
+
+Words in virtual memory file which have not been used are assigned a
+pattern of all one bits.
+
+lx_comments attributes are not represented.
+
+
+REPRESENTATION OF DIANA AS ADA OBJECTS
+
+Diana nodes of (Ada) type TREE are represented as Ada records with the
+format described above.
+
+Diana nodes of (Ada) type SEQ_TYPE, representing sequences of nodes, are
+represented as Ada records containing (1) the node as described above for
+lists in virtual memory and (2) a field containing either (a node of type)
+nil or a pointer to one of the nodes of type list, usually the last such,
+in the representation of the sequence in virtual memory.  (This permits
+appending to objects of type SEQ_TYPE without chasing down the list each
+time.)
+
+Declarations of TREE and SEQ_TYPE are given in the package USERPK (as in
+Diana 83).
+
+
+
+STRING-PROCESSING ROUTINES
+
+The package USERPK also contains some routines for working with
+varyable-length strings.  Type PNAME represents a variable-length string
+of maximum length 127; it is a limited private type, so that predefined
+equality cannot be used.  In the front end, PNAME's are only used as local
+variables; heap storage is not used.  Generally, Ada type STRING is used
+except when a string is to be stored temporarily.  The following
+operations are provided:
+
+    procedure SET (...) -- assignment of STRING's and PNAME's
+    function LENGTH (...) -- length of a PNAME
+    function TO_STRING (...) -- convert PNAME to Ada STRING
+    procedure PUT (...) -- like TEXT_IO, but for PNAME's
+    procedure PUT_LINE (...) -- likewise
+    function "&" (...) -- catenation of CHARACTER's, STRING's and PNAME's
+	      -- result is always STRING
+    function "=" (...) -- for PNAME's
+    function IS_EQUAL (...) -- comparison of PNAME's and STRING's
+
+The type PNAME is represented as a record containing an 8-bit length
+followed by 127 characters.  In the Vax implementation, an 8-bit integer
+field and a STRING(1..127) field are used.  In other implementations, such
+as Sun/Verdix, a single field of type array(0..127) of character is used,
+with the length stored as the 'POS of the 0'th character; this is because
+the appropriate representation clauses do not work.
+
+At some future date, the length field will probably be expanded so that
+the same code works on all implementations; this should be transparent to
+users of the front-end.
+
+
+ADA INTERFACE TO DIANA
+
+The Ada interface to Diana is patterned on the Ada interface given in
+Diana 83.  There are differences due to the unavailability of a full Ada
+compiler at the time the interface was designed.  The major differences
+are:
+
+	 -    The interface is defined in three packages, DIANATTR, DIANA,
+	      and DIANAMAN, instead of only one.  DIANATTR contains an
+	      enumeration type for attributes, DIANA contains an
+	      enumeration type for node names and functions and
+	      procedures which depend on the particular IDL definition of
+	      Diana, and DIANAMAN contains functions and procedures which
+	      are independent of the particular IDL definition.
+
+	 -    Instead of providing, for each attribute, a function to
+	      fetch it and a procedure to store it, attributes are
+	      implemented as an enumeration type and one function D and
+	      one procedure D are provided to fetch and store tree-valued
+	      attributes.  (For example, attribute as_name of node nnn is
+	      fetched by the function call D(AS_NAME, NNN) rather than by
+	      the [Diana 83] function call AD_NAME(NNN).
+
+	 -    Subtypes of NODE_NAME are provided for Diana classes.
+
+
+These are simple syntactic differences.   At some time in the future, an
+interface more like Diana 83 will be provided in addition to the current
+one.
+
+A condensed version of the Ada specification for the three packages
+follows:
+
+    package DIANATTR is
+
+	 type ATTRIBUTE_NAME is
+	      ( ...
+	      , AS_NAME
+	      . ... );
+
+    end DIANATTR;
+
+
+    package DIANA is
+
+	 type NODE_NAME is
+	      ( ...
+	      , DN_USED_NAME_ID
+	      , ... );
+
+	 ...	  -- subtypes for Diana classes
+	 subtype CLASS_DESIGNATOR is NODE_NAME
+			   range DN_USED_CHAR .. DN_USED_NAME_ID;
+	 ...
+
+	 procedure CREATE_DIANA; -- initialize new virtual memory
+	 procedure OPEN_DIANA; -- attach to existing virtual memory
+
+	 function MAKE(C: in NODE_NAME) return TREE;	-- make a Diana node
+	 -- procedure DESTROY -- not provided
+	 function KIND(T: in TREE) return NODE_NAME;	-- get node type
+
+	 procedure D (A: ATTRIBUTE_NAME; T: in TREE; V: in TREE);
+	      -- store value of tree-valued attribute
+	 function  D (A: ATTRIBUTE_NAME, T: in TREE) return TREE;
+	      -- fetch value of tree-valued attribute
+
+	 procedure DB(A: ATTRIBUTE_NAME; T: in TREE; V: in TREE);
+	      -- store value of boolean-valued attribute
+	 function  DB(A: ATTRIBUTE_NAME, T: in TREE) return TREE;
+	      -- fetch value of boolean-valued attribute
+
+	 procedure D (A: ATTRIBUTE_NAME; T: in TREE; V: in TREE);
+	      -- store value of integer-valued attribute
+	 function  D (A: ATTRIBUTE_NAME, T: in TREE) return TREE;
+	      -- fetch value of integer-valued attribute
+
+	 function NODE_IMAGE(C: NODE_NAME) return STRING;
+	 function ATTR_IMAGE(A: ATTRIBUTE_NAME) return STRING;
+              -- similar to 'IMAGE functions
+
+    end DIANA;
+
+
+    package DIANAMAN is
+
+	 CONST_FALSE:  constant TREE := ...; -- constants for certain
+	 CONST_TRUE:   constant TREE := ...; -- node types with no
+	 CONST_NIL:    constant TREE := ...; -- attributes
+	 CONST_VOID:   constant TREE := ...;
+	 CONST_ROOT:   constant TREE := ...;
+	 CONST_VIRGIN: constant TREE := ...;
+
+	 procedure CLOSE_DIANA; -- detach from virtual memory; close file
+
+	 -- type ARITIES -- moved to package USERPK
+	 function ARITY (T: IN TREE)  return ARITIES;
+	 function SON1 (T: IN TREE) return TREE;
+	 ...
+              -- "general" tree walk subprograms from Diana 83 (not too
+	      -- useful, since order of as_ attribures not uniform
+
+	 function HEAD ...
+	 function TAIL ...
+	 function MAKE;
+	 function IS_EMPTY ...
+	 function INSERT ...
+	 function APPEND ...
+	      -- list-processing subprograms from Diana 83
+	 function SINGLETON (V: TREE) return SEQ_TYPE;
+	      -- makes list with one element
+	 procedure POP (L: in out SEQ_TYPE; T: out TREE);
+	      -- removes and returns head of list
+
+	 procedure LIST (T: in TREE; V: in SEQ_TYPE);
+	 function  LIST (T: in TREE);
+              -- store/fetch the 'Seq of' attribute of a node
+
+	 ... -- various functions and procedures used by only by DIANA
+
+	 ... -- functions and procedures for creating and searching for
+	     -- text strings and source positions
+
+	 ... -- procedures for recording errors and warnings within the
+	     -- front end
+
+    end DIANAMAN;
+
+
+
+ADDING NEW NODES AND ATTRIBUTES
+
+New nodes and attributes can be added by inserting them in the file
+DIANA.IDL and running the Diana tools described below.	Because of field
+sizes, there is a limit of 255 attributes types and 255 node types.
+
+Note that modification of the Diana definition requires recompilation of
+most of the Ada sources in the system; there is no provision for
+"refinement" of the IDL specification.
+
+
+LIBRARY MANAGEMENT
+
+There is a simple, quick-and-dirty scheme for manageing the Ada library. 
+It is correct, according to the LRM; just a bit crude.
+
+The file ADA__LIB.CTL is a control file.  It is ASCII text, processed by
+TEXT_IO.  It contains translations between long unit names and DOS-compatible
+file names; it also contains a "time stamp" -- an integer in the range 1..32767
+-- for use in version control.  Entries are as follows:
+
+	U <short-name>   			-- <short-name>.DCL, .BDY
+	<full-name-of-library-unit>
+
+	S <short-name>				-- <short-name>.SUB
+	<full-name-of-library-unit>
+	<flul-name-of-subunit>
+
+	T <time-stamp>
+
+Library units whose name is at most 8 characters are not indicated in the
+control file; the unit name is the file name.  Otherwise, a short name
+is constructed fron the first 4 characters of the unit name, a '$',
+and a 3 character code constructed from the time stamp.  Library unit
+declarations, including subprogram bodies which are library units, are
+represented by .DCL files; secondary units which are not sub units are
+represented by .BDY files; subunits are represented by .SUB files.
+
+The file representing the compilation unit consists of DIANA compacted
+into contiguous pages.  Each library file contains (as an attribute of
+the compilation_unit node) a list of units which it transitively withs.
+The phase libphase reads withed units and relocates all node pointers 
+so that the compilation has access to the entire Diana tree of the
+library units in scope.  Phase writelib compacts the Diana by copying
+all nodes of each compilation unit to a contiguous set of pages and
+writing those pages into a file.  The compilation_unit node also contains
+its own timestamp, which must be greater than that of all transitively 
+withed units for the unit to be valid.
+
+
+INSTALLATION INSTRUCTIONS
+
+Brief installation instructions follow.  Note that, as of this writing,
+the Diana generation and grammar processing programs not been run only on
+the Vax; they have no known system dependencies, except for the use of a
+system-dependent version of USERPK, so there should not be a lot of
+difficulty in bringing them up.  It is suggested that the front end itself
+be brought up first, beginning with the running of loadgrmr with the Ascii
+input files provided.
+
+1.  Compilation:
+
+Files of the form *.a are Ada sources to be compiled.  It is suggested
+that files of the form *_.a, which are Ada specifications, be compiled
+using a compilation order tool, such as the Verdix 'a.make -f *_.a'.
+Next, evalnum.a and set_dflt.a, which contain Ada subprogram bodies
+without separate specifications, should be compiled.  Finally, the
+remaining files *.a can be compiled in any order.  Note that eachfile
+contains one compilation unit, except for diana_.a, which contains
+specifications of both DIANATTR and DIANA, and reqgene_.a which contains
+both the specifications and bodies of generic units.
+
+2.  Linking:
+
+The following main programs can be linked after the above compilations are
+complete:
+
+    To generate LALRIDL, "small" IDL used by Diana tools (optional)
+
+	 readidl
+	 putladn
+	 putlaidl
+
+    To generate DIANA from specifications
+
+	 readdn
+	 putdn
+	 makeidl
+
+    Tools for maintaining and printing IDL specification
+
+	 hieridl
+	 fixters
+
+    LALR grammar processing
+
+	 readgrmr
+	 optrgrmr
+	 initgrmr
+	 statgrmr
+	 lalrgrmr
+	 chekgrmr
+
+    Printing the states created during grammar processing (useful if
+    grammar needs to be debugged)
+
+	 prntstat
+
+    Loading LALR tables from Ascii grammar file
+
+	 loadgrmr
+
+    Phases of the front end
+
+	 parphase
+	 libphase
+	 semphase
+	 repphase  ) alternate
+	 errphase  ) versions
+	 writelib
+
+    Tool to print the Diana tree
+
+	 prettydi
+	 prntdian  (old version)
+
+    Program to fix up predefined environment
+
+	 fixpre
+
+    "Ugly printer" for maintaining source code (optional)
+
+	 ugly
+
+3.  General notes on execution:
+
+Most of the programs make use of a virtual memory file, $$$.TMP (yes,
+dollar signs and capitals) created at the beginning of a run or retained
+from a previous run.  Generally file names are all capitals; it was
+written this way before conversion to Unix.
+
+To avoid system dependencies, fixed file names are used and files are
+copied (or linked or moved) before and after execution.  Thus, such
+system-dependent operations as reading the command line are moved to the
+controlling JCL (or .COM or shell) files.  Generally, $$$PGM.TMP is the
+input to a program that reads a text file.
+
+The statement that program b "runs after" program a means that program b
+expects to use the virtual memory file left by the execution of program a.
+
+4.  Generation of LALRIDL:
+
+(You probably won't need to do this; LALRIDL is a small IDL structure used
+by the Diana processing programs.  It creates itself; once, long ago, it
+was bootstrapped with great pain.  The programs are included for
+completeness.)
+
+	 readidl -- reads LALRIDL.TBL
+	 putladn -- creates new LALRIDL package spec
+	 rename created spec to lalridl_.a
+	 putlaidl -- creates new LALRIDL table
+	 rename created table to LALRIDL.TBL
+
+5.  To generate DIANA from specifications
+
+	 readdn -- reads DIANA.IDL (lines starting with @@)
+	 putdn -- makes new package spec DIANA.NEW
+	 rename DIANA.NEW to diana_.a
+	 makeidl -- makes new DIANA table DIANATBL.NEW
+	 rename DIANATBL.NEW to DIANA.TBL
+
+6.  Tools for maintaining and printing IDL specification
+
+	 hieridl -- run after readidl; prints structure of Diana
+		 -- definition
+
+	 fixters -- run after readidl (?); reads DIANA.IDL and creates
+		 -- new version with ++ lines regenerated
+
+7.  LALR grammar processing
+
+	 readgrmr -- reads grammar from DIANA.IDL; also reads DIANA.TBL
+	 optrgrmr
+	 initgrmr
+	 statgrmr
+	 lalrgrmr -- (runs a long time -- 3 to 4 min Vax 8600 cpu time)
+	 chekgrmr -- writes PARSE.TBL -- Ascii version of LALR table
+
+8.  Printing the states created during grammar processing (useful if
+    grammar needs to be debugged)
+
+	 prntstat -- runs after statgrmr or lalrgrmr; prints a lot
+
+9.  Loading LALR tables from Ascii grammar file
+
+	 loadgrmr -- reads DIANA.TBL, PARSE.TBL
+		  -- writes DIANA.BIN, PARSE.BIN -- used in front end
+	 copy $$$.TMP to PARSE.VM -- initial virtual memory for front end
+
+
+10. Translating the predefined environment (used parphase and writelib
+    from the front end) -- shell script provided: makepre
+
+	 copy PARSE.VM to $$$.TMP
+	 copy predef.aa to $$$PGM.TMP
+	 parphase
+	 fixpre
+	 writelib
+
+11. Running the front end -- shell script provided: front  (Note: ADA__
+    LIB.TMP may be renamed, but need not be, if earlier errors.)
+
+	 copy PARSE.VM to $$$.TMP
+	 copy program to be compiled to $$$PGM.TMP
+	 parphase
+	 libphase -- if no errors, do withing of library files
+	 semphase -- if no errors, do semantic processing
+	 errphase  -- prints error list; use repphase for full source
+	 rename ADA__LIB.TMP to ADA__LIB.CTL
+	 writelib  -- if no errors, write library files
+
+12. Translating predefined packages.  Predefined packages can now be
+    compiled as ordinary Ada units.  As of this writing only SYSTEM is
+    provided; others will be as in RM.
+
+	 perform step 11. above on system.aa
+	 (using shell script front, give command:
+	      front system.aa
+	 )
+
+13. Running tool to print the Diana tree
+
+	 prettydi -- runs on output from any front end phase
+
+14. Running "ugly printer" for maintenance of sources (optional).  Fixes
+    up upper and lower case; checks for some common syntax errors; throws
+    away all end's (end;, end if;, etc.) and regenerates them from the
+    indentation.
+
+	 copy source file to $$$PGM.TMP
+	 ugly
+	 save old source file for backup
+	 rename $$$.TMP to be new source file
+
+
+INDEX OF FILES
+
+In lieu of more complete documentation, the following list of files
+provided includes a very brief note as to the content and function of each
+file.
+
+DIANA.TBL	-- Ascii description of DIANA nodes and attributes
+			-- created by putidl
+			-- read by programs (e.g. loadgrmr) which create a
+			--	new virtual memory file ($$$.TMP)
+			-- also read by programs which use LALRIDL instead
+			--	of Diana, but which need some info on Diana
+LALRIDL.TBL	-- description of nodes and attributes used by LALR/Diana tools
+			-- created by putlaidl
+			-- read by programs (e.g. readidl) which create a
+			--	new virtual memory file ($$$.TMP)
+PARSE.TBL	-- Ascii description of LALR parse tables
+			-- created by chekgrmr
+			-- read by loadgrmr
+_standrd.aa	-- Spec of predefined standard
+ada__lib.ini	-- Virgin library control file
+			-- copy to ADA__LIB.CTL to make an empty library
+aggreso.a	-- (in semphase) -- process aggregates
+aggreso_.a
+attwalk.a	-- (in semphase) -- process attributes
+attwalk_.a
+chekgrmr.a	-- LALR program -- check LALR condition and write Ascii grmr
+chkstat.a	-- (in semphase) -- test for static subtype, range, etc.
+chkstat_.a
+defutil.a       -- (in semphase) -- process 'def' nodes.  A def node records
+defutil_.a		-- declaration of name (outside of normal Diana)
+defwalk.a	-- (in semphase) -- process type definitions
+defwalk_.a
+derived.a	-- (in semphase) -- create derived subprograms
+derived_.a
+diana.a 	-- packages DIANATTR and DIANA -- created by putdn
+diana.idl	-- definition of Ada LALR grammar and Diana (interleaved)
+diana_.a	-- package body DIANA
+dianaman.a	-- package DIANAMAN -- functions and procedures for Diana
+dianaman_.a		-- any that care about Diana definition are
+			-- called through package DIANA
+dianatbl_.a	-- storage for in core version of DIANA.TBL
+errphase.a	-- phase of front end -- prints errors and lines in error
+			-- repphase is similar, prints all of source
+evalnum.a	-- (in semphase) -- evaluate universal integer or real literal
+expreso.a	-- (in semphase) -- second (top-down) pass of overload
+expreso_.a		-- resolution
+exptype.a	-- (in semphase) -- first (bottom-up) pass of overload
+exptype_.a		-- resolution
+fixpre.a	-- program to fix up predefined environment after parsing
+fixters.a       -- support program -- puts the '++' lines in diana.idl
+fixwith.a       -- (in semphase) -- makes 'def' nodes for transitively
+fixwith_.a		-- withed declarations
+front		-- shell script to run the front end
+gensubs.a	-- (in semphase) -- substitution within generic instations
+gensubs_.a
+grmrops.a	-- (in chekgrmr, parphase) declaration of parse semantic actions
+grmrops_.a
+grmrtbl_.a	-- (in chekgrmr, parphase) lalr grammar table
+hieridl.a	-- support program -- prints a hierarchical description of Diana
+homunit.a	-- (in semphase) -- searches for unit which is a homograph
+homunit_.a		-- of a given unit (for rename unit, formal subprogram)
+initgrmr.a	-- LALR program -- initializes grammar structure, checks
+			-- grammar (except for LALR conflicts)
+instant.a	-- (in semphase) -- generic instantiations
+instant_.a
+lalrgrmr.a	-- LALR program -- given states, generates LALR lookahead sets
+lalridl.a	-- package LALRIDL -- small IDL structure used by LALR stuff
+lalridl.idl	-- IDL definition of LALRIDL
+lalridl_.a
+libphase.a	-- phase of front end -- determine withed units and load them
+loaddtbl.a	-- loads core version of DIANA.TBL
+loaddtbl_.a		-- (used by various support programs)
+loadgrmr.a	-- load Ascii grammar file into empty virtual memory
+			-- $$$.TMP created is copied at start of front end run
+lscan.a 	-- Ada lexical scan
+lscan_.a
+ltext_io.a	-- Used in some support programs (duplicates some things in
+ltext_io_.a             -- TEXT_IO that weren't there when project started)
+ltype.a 	-- Definition of types of lexical tokens (body implements
+ltype_.a                -- images - 'IMAGE didn't work when project started)
+makeidl.a	-- generate DIANA.TBL from stuff read in by readdn
+makenod.a	-- creates given Diana nodes (generated from the Diana)
+makenod_.a
+makepre 	-- shell script to compile predefined environment
+makeskel.a	-- $$$$ may be deleted--
+newsnam.a	-- (in semphase) -- generate new source name (during
+newsnam_.a		-- substitution for generic instantiation)
+nodwalk.a	-- (in semphase) -- Walks various nodes of Diana, expecially
+nodwalk_.a		-- declaration nodes
+optrgrmr.a	-- LALR program -- decreases size of grammar by eliminating
+			-- certain productions; needed to get < 256 rules
+pageio_.a	-- Direct IO for virtual memory operations
+pageman.a	-- Virtual memory paging operations
+pageman_.a
+parphase.a	-- phase of front end -- lexical scan and LALR parse
+prawalk.a	-- (in semphase) -- process pragmas
+prawalk_.a
+prefcns.a	-- (in semphase) -- create predefined operations
+prefcns_.a
+prename_.a	-- predefined names of attributes, pragmas, etc
+prettydi.a	-- pretty print program for diana
+printnod.a	-- routines to print diana nodes (used by prettydi, debug calls)
+printnod.vax	-- VAX version
+printnod_.a
+prntdian.a	-- diana pretty printer (older than prettydi; may work on
+prntstat.a              -- erroneous trees when prettydi doesn't)
+putdn.a 	-- writes diana_.a from data read by readdn
+putladn.a	-- writes lalridl.a from data read by readidl
+putlaidl.a	-- writes LALRIDL.TBL from data read by readidl
+readdn.a	-- reads diana definition into virtual memory for support tools
+readgrmr.a	-- LALR program -- reads grammar and semantics (ignores Diana)
+readidl.a	-- reads LALRIDL definition for support tools
+redsubp.a	-- (in semphase) -- processes subprogram calls, also slices,
+redsubp_.a		-- conversions, etc.
+repphase.a	-- phase of front end (optional) -- prints source and errors
+reqgene_.a	-- generics used by requtil
+requtil.a	-- reduces sets of declarations and types according to
+requtil_.a		-- RM requirements
+semglob.a	-- (in semphase) -- global data visible to almost everyone
+semglob_.a
+semphase.a	-- phase of front end -- semantic analysis
+set_dflt.a	-- (in parphase) -- fills in default values of some attributes
+setutil.a	-- process sets of (1) definitions and (2) types used
+setutil_.a		-- in overload resolution
+statgrmr.a	-- LALR program -- creates LR(0) for LALR table
+stmwalk.a	-- (in semphase) -- process statements
+stmwalk_.a
+system.aa	-- Specification of predefined package SYSTEM
+termlist.a	-- (in LALR programs) utilities for processing lists of
+termlist_.a		-- terminal symbols
+text2_io_.a	-- Stripped down TEXT_IO
+uarith.a	-- universal arithmetic
+uarith_.a
+ugly.a          -- an 'ugly printer' -- tool to take correctly-indented Ada
+                        -- and make end's right (opposite of a pretty printer)
+univops.a	-- universal arithmetic, internal operations called from
+univops_.a		-- uarith
+userpk.a	-- declaration of types used by Diana (see Diana 83)
+userpk.vax	-- VAX version (different def of a varying string)
+userpk_.a
+userpk_.vax
+visutil.a	-- (in semphase) -- functions to find visible identifiers
+visutil_.a
+writelib.a	-- phase of front end -- writes new library file
+ADA__LIB.CTL	-- Ada library control file (copy from ada__lib.ini)
+
+
+FUTURE PLANS
+
+The current implementation is a prototype.  It is intended to replace it
+with a production-quality version over the next 6 to 12 months.  The
+production-quality version will, of course, pass all of the ACVC's, not
+just the class A and C tests.  It will be possible to use the current
+Diana interface; other versions will probably also be supplied.
+
+KNOWN PROBLEMS
+
+In a few cases, the attributes are not as they should be in the Diana bool:
+
+	sm_master is not filled in
+	sm_depends_on_discriminant is not filled in
+	for array aggregates and strings,
+		sm_exp_type is the base type, not subtype for aggregate
+			(it is void for subaggregates)
+		sm_discrete_range is not filled in
+		sm_normalized_param_s is not filled in
+
+If someone needs these now, tell me.
+
+Please feel free to call me to report bugs or ask questions.
+Bill Easton, Peregrine Systems (703)689-1168, easton@ida.org
+

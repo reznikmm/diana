@@ -1,0 +1,71 @@
+with USERPK, LTEXT_IO, LALRIDL, DIANAMAN;
+use  USERPK, LTEXT_IO, LALRIDL, DIANAMAN;
+procedure PRNTSTAT is
+  -- print LALR parse states (for debug)
+  USER_ROOT:	TREE;
+  STATE_SEQ:	SEQ_TYPE;
+  STATE:	TREE;
+  ITEM_SEQ:	SEQ_TYPE;
+  ITEM: 	TREE;
+  ALT:		TREE;
+  SYL_SEQ:	SEQ_TYPE;
+  SYL:		TREE;
+  TEMP_SEQ:	SEQ_TYPE;
+  GOTO_STATE:	TREE;
+  FOLLOW:	TREE;
+  OLD_FOLLOW:	TREE;
+begin
+  OPEN_DIANA;
+  USER_ROOT := D(XD_USER_ROOT, CONST_ROOT);
+  STATE_SEQ := LIST(D(XD_STATELIST,USER_ROOT));
+  while not IS_EMPTY(STATE_SEQ) loop
+    STATE := HEAD(STATE_SEQ); STATE_SEQ := TAIL(STATE_SEQ);
+    NEW_LINE;
+    PUT("State No.");PUT(DI(XD_STATE_NBR,STATE));PUT(" ::");NEW_LINE;
+    ITEM_SEQ := LIST(STATE);
+    OLD_FOLLOW := CONST_VOID;
+    while not IS_EMPTY(ITEM_SEQ) loop
+      ITEM := HEAD(ITEM_SEQ); ITEM_SEQ := TAIL(ITEM_SEQ);
+      ALT := D(XD_ALTERNATIVE, ITEM);
+      PUT(DI(XD_ALT_NBR,ALT));PUT(": ");
+      PUT(PRINTNAME(D(XD_NAME,D(XD_RULE,ALT))));PUT(" ::=");
+      SYL_SEQ := LIST(ALT);
+      for I in 1 .. DI(XD_SYL_NBR, ITEM) loop
+	if IS_EMPTY(SYL_SEQ) then
+	  PUT(" ***TOO-FEW-SYLLABLES***");
+	  exit;
+	end if;
+	SYL := HEAD(SYL_SEQ); SYL_SEQ := TAIL(SYL_SEQ);
+        PUT(' ');PUT(PRINTNAME(D(XD_SYMREP,SYL)));
+      end loop;
+      TEMP_SEQ := LIST(ITEM);
+      if SYL_SEQ.H /= TEMP_SEQ.H then
+	PUT(" ***BAD-TAIL-IN-ITEM***");
+      end if;
+      PUT(' '); PUT('@');
+      while not IS_EMPTY(SYL_SEQ) loop
+	SYL := HEAD(SYL_SEQ); SYL_SEQ := TAIL(SYL_SEQ);
+        PUT(' ');PUT(PRINTNAME(D(XD_SYMREP,SYL)));
+      end loop;
+      GOTO_STATE := D(XD_GOTO,ITEM);
+      if KIND(GOTO_STATE) /= DN_VOID then
+        PUT(' ');PUT("===> "); PUT(DI(XD_STATE_NBR,GOTO_STATE),1);
+      else
+	FOLLOW := D(XD_FOLLOW, ITEM);
+	--if FOLLOW /= OLD_FOLLOW then
+	-- OLD_FOLLOW := FOLLOW;
+	SYL_SEQ := LIST(FOLLOW);
+	if not IS_EMPTY(SYL_SEQ) then
+          PUT(' ');PUT("--->");
+	  while not IS_EMPTY(SYL_SEQ) loop
+	    SYL := HEAD(SYL_SEQ); SYL_SEQ := TAIL(SYL_SEQ);
+            PUT(' ');PUT(PRINTNAME(D(XD_SYMREP,SYL)));
+	  end loop;
+	-- end if;
+	end if;
+      end if;
+      NEW_LINE;
+    end loop;
+  end loop;
+  CLOSE_DIANA;
+end PRNTSTAT;

@@ -1,0 +1,39 @@
+package LOADDTBL is
+
+  type AC_STRING is access STRING;
+
+  type NODE_INDEX_TYPE 	     is range 0 .. 255;
+  type ATTR_INDEX_TYPE	     is range 0 .. 255;
+  type CLASS_INDEX_TYPE	     is range 0 .. 150;
+  type NODE_ATTR_INDEX_TYPE  is range 0 .. 900;
+
+  LAST_NODE:  NODE_INDEX_TYPE;
+  LAST_ATTR:  ATTR_INDEX_TYPE;
+  LAST_CLASS: CLASS_INDEX_TYPE;
+
+  NODE_ID: array (NODE_INDEX_TYPE) of AC_STRING;
+	-- name of node
+  NODE_ATTR_LOW: array (NODE_INDEX_TYPE) of NODE_ATTR_INDEX_TYPE;
+  NODE_ATTR_HIGH: array (NODE_INDEX_TYPE) of NODE_ATTR_INDEX_TYPE;
+	-- slice of Node_Attr giving attributes (null slice if none)
+
+  ATTR_ID: array (ATTR_INDEX_TYPE) of AC_STRING;
+	-- name of the attribute
+  ATTR_KIND: array (ATTR_INDEX_TYPE) of CHARACTER; -- 'A' 'B' 'I' or 'S'
+	-- whether attribute is tree, boolean, integer or sequence
+
+  CLASS_ID: array (CLASS_INDEX_TYPE) of AC_STRING;
+	-- name of the class
+  CLASS_LOW: array (CLASS_INDEX_TYPE) of NODE_INDEX_TYPE;
+	-- index of first node in the class
+  CLASS_HIGH: array (CLASS_INDEX_TYPE) of NODE_INDEX_TYPE;
+	-- index of last node in the class
+
+  NODE_ATTR: array (NODE_ATTR_INDEX_TYPE) of ATTR_INDEX_TYPE;
+	-- slices of this give attributes of nodes
+
+  function UPPER_CASE (A: STRING) return STRING;
+
+  procedure READ_TABLE;
+
+end LOADDTBL;

@@ -1,0 +1,86 @@
+with TEXT2_IO; -- Note. no 'use'
+package body LTEXT_IO is
+
+  COL: INTEGER := 0;
+  MAX: constant := 79;
+
+  -- ?? BIG: array (-INTEGER(1)..6) of INTEGER;
+
+  procedure NEW_LINE is
+  begin
+    TEXT2_IO.NEW_LINE;
+    COL := 0;
+  end NEW_LINE;
+
+  procedure PUT(V: CHARACTER) is
+  begin
+    if COL < MAX then
+      TEXT2_IO.PUT(V);
+      COL := COL + 1;
+    else
+      NEW_LINE;
+      if V /= ' ' then
+	PUT(V);
+      end if;
+    end if;
+  end PUT;
+
+  procedure PUT(V: STRING) is
+    LEN: INTEGER := V'LENGTH;
+  begin
+    COL := COL + LEN;
+    if COL <= MAX then
+      TEXT2_IO.PUT(V);
+    elsif LEN <= MAX then
+      NEW_LINE;
+      PUT(V);
+    else
+      COL := COL - LEN;
+      for I in 1 .. LEN loop
+	PUT(V(I));
+      end loop;
+    end if;
+  end PUT;
+
+  procedure PUT(V: INTEGER) is
+  begin
+    if COL <= MAX - 6 then
+      TEXT2_IO.PUT(V,1);
+      COL := COL + 6;
+    else
+      NEW_LINE;
+      PUT(V);
+    end if;
+  end PUT;
+
+  procedure PUT(V: INTEGER; W: INTEGER) is
+    TV: INTEGER := v;
+    TL: INTEGER := 1;
+  begin
+    if TV < 0 then
+      TV := - TV;
+      TL := 2;
+    end if;
+    while TV >= 10 loop
+      TV := TV/10;
+      TL := TL + 1;
+    end loop;
+    if TL < W then
+      TV := W;
+    end if;
+    if COL <= MAX - TL then
+      TEXT2_IO.PUT(V,TL);
+      COL := COL + TL;
+    else
+      NEW_LINE;
+      PUT(V,TL);
+    end if;
+  end PUT;
+
+  procedure PUT_LINE(V: STRING) is
+  begin
+    PUT(V);
+    NEW_LINE;
+  end PUT_LINE;
+
+end LTEXT_IO;

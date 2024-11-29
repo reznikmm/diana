@@ -1,0 +1,95 @@
+with TEXT2_IO;
+package body USERPK is
+
+   procedure SET(A: out PNAME; TO: PNAME) is
+   begin
+     A.LEN := TO.LEN;
+     A.BDY(1 .. INTEGER(TO.LEN)) := TO.BDY(1 .. INTEGER(TO.LEN));
+   end;
+
+   procedure SET(A: out PNAME; TO: STRING) is
+   begin
+     A.LEN := TO'LENGTH;
+     A.BDY(1 .. TO'LENGTH) := TO;
+   end;
+
+   procedure SET(A: out PNAME; TO: CHARACTER) is
+   begin
+     A.LEN := 1;
+     A.BDY(1) := TO;
+   end;
+
+   function LENGTH(A: PNAME) return NATURAL is
+   begin
+     return NATURAL(A.LEN);
+   end;
+
+   function TO_STRING(A: PNAME) return STRING is
+   begin
+     return A.BDY(1 .. INTEGER(A.LEN));
+   end;
+
+   procedure PUT(ITEM: in PNAME) is
+   begin
+     TEXT2_IO.PUT(ITEM.BDY(1 .. INTEGER(ITEM.LEN)));
+   end;
+
+   procedure PUT_LINE(ITEM: in PNAME) is
+   begin
+     TEXT2_IO.PUT_LINE(ITEM.BDY(1 .. INTEGER(ITEM.LEN)));
+   end;
+
+   function "&" (LEFT: PNAME    ; RIGHT: PNAME    ) return STRING is
+   begin
+     return STANDARD."&"(LEFT.BDY(1..INTEGER(LEFT.LEN)),
+			 RIGHT.BDY(1..INTEGER(RIGHT.LEN)) );
+   end;
+
+   function "&" (LEFT: PNAME    ; RIGHT: STRING   ) return STRING is
+   begin
+     return STANDARD."&"(LEFT.BDY(1..INTEGER(LEFT.LEN)), RIGHT);
+   end;
+
+   function "&" (LEFT: STRING   ; RIGHT: PNAME    ) return STRING is
+   begin
+     return STANDARD."&"(LEFT, RIGHT.BDY(1..INTEGER(RIGHT.LEN)));
+   end;
+
+   function "&" (LEFT: PNAME    ; RIGHT: CHARACTER) return STRING is
+   begin
+     return STANDARD."&"(LEFT.BDY(1..INTEGER(LEFT.LEN)), RIGHT);
+   end;
+
+   function "&" (LEFT: CHARACTER; RIGHT: PNAME    ) return STRING is
+   begin
+     return STANDARD."&"(LEFT, RIGHT.BDY(1..INTEGER(RIGHT.LEN)));
+   end;
+
+   function "="(LEFT, RIGHT: PNAME) return BOOLEAN is
+   begin
+     return STANDARD."="(INTEGER(LEFT.LEN), INTEGER(RIGHT.LEN))
+     and then STANDARD."="(LEFT.BDY(1..INTEGER(LEFT.LEN)),
+			   RIGHT.BDY(1..INTEGER(LEFT.LEN)) );
+   end;
+
+   function IS_EQUAL(LEFT: STRING; RIGHT: PNAME) return BOOLEAN is
+   begin
+     return LEFT'LENGTH = RIGHT.LEN
+     and then LEFT = RIGHT.BDY(1 .. LEFT'LENGTH);
+   end;
+
+   function IS_EQUAL(LEFT: PNAME; RIGHT: STRING) return BOOLEAN is
+   begin
+     return LEFT.LEN = RIGHT'LENGTH
+     and then LEFT.BDY(1 .. RIGHT'LENGTH) = RIGHT;
+   end;
+
+   procedure QUIT(MSG: STRING) is
+   begin
+     TEXT2_IO.NEW_LINE;
+     TEXT2_IO.PUT("*** ABORTING *** ");
+     TEXT2_IO.PUT_LINE(MSG);
+     raise PROGRAM_ERROR;
+   end;
+
+end USERPK;

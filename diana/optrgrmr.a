@@ -1,0 +1,266 @@
+with TEXT2_IO, USERPK, LALRIDL, DIANAMAN;
+use  TEXT2_IO, USERPK, LALRIDL, DIANAMAN;
+procedure OPTRGRMR is
+  GRAMMAR:	TREE;
+  GR_RULE_SEQ:	SEQ_TYPE;
+
+  type RTBL_TYPE is
+    record
+      RULE:		TREE;
+      REPLACEMENT:	TREE;
+      USE_COUNT:	INTEGER;
+      IS_ONE_ALT:	BOOLEAN;
+    end record;
+  RTBL: 		array (1 .. 350) of RTBL_TYPE;
+  RTBL_LAST:		INTEGER := 0;
+
+  procedure MAIN;
+  procedure FIRST_PASS;
+  procedure PROPAGATE_REPLACEMENT(I, LIM: INTEGER);
+  procedure SECOND_PASS;
+  procedure THIRD_PASS;
+  procedure REPLACE_ALTS(ALT_LIST: in out SEQ_TYPE);
+  function  CATENATE(A,B: SEQ_TYPE) return SEQ_TYPE;
+  procedure REWRITE;
+
+  procedure MAIN is
+    USER_ROOT:		TREE;
+  begin
+    OPEN_DIANA;
+    USER_ROOT := D(XD_USER_ROOT, CONST_ROOT);
+    GRAMMAR := D(XD_GRAMMAR, USER_ROOT);
+    GR_RULE_SEQ := LIST(GRAMMAR);
+    PUT_LINE("First pass.");
+    FIRST_PASS;
+    PUT_LINE("Second pass.");
+    SECOND_PASS;
+    PUT_LINE("Third pass.");
+    THIRD_PASS;
+    PUT_LINE("Rewrite.");
+    REWRITE;
+    CLOSE_DIANA;
+  end MAIN;
+
+  procedure FIRST_PASS is
+    RULE_SEQ:		SEQ_TYPE := GR_RULE_SEQ;
+    RULE:		TREE;
+    IS_ONE_ALT: 	BOOLEAN;
+    SYL_LIST:		SEQ_TYPE;
+    SYL:		TREE;
+    DEF_LIST:		SEQ_TYPE;
+  begin
+    while not IS_EMPTY(RULE_SEQ) loop
+      RULE := HEAD(RULE_SEQ); RULE_SEQ := TAIL(RULE_SEQ);
+      RTBL_LAST := RTBL_LAST + 1;
+      RTBL(RTBL_LAST).RULE := RULE;
+      RTBL(RTBL_LAST).REPLACEMENT := CONST_VOID;
+      RTBL(RTBL_LAST).USE_COUNT := 0;
+      DI(XD_RULEINFO, RULE, RTBL_LAST);
+      IS_ONE_ALT := IS_EMPTY(TAIL(LIST(RULE)));
+      RTBL(RTBL_LAST).IS_ONE_ALT := IS_ONE_ALT;
+      if IS_ONE_ALT then
+	SYL_LIST := LIST(HEAD(LIST(RULE)));
+	if not IS_EMPTY(SYL_LIST)
+	and then IS_EMPTY(TAIL(SYL_LIST))
+	-- and then semantics is null
+	and then IS_EMPTY(LIST(D(XD_SEMANTICS,HEAD(LIST(RULE))))) then
+	  SYL := HEAD(SYL_LIST);
+	  if KIND(SYL) /= DN_TERMINAL then
+	    DEF_LIST := LIST(D(XD_SYMREP, SYL));
+	    while not IS_EMPTY (DEF_LIST)
+	    and then KIND(HEAD(DEF_LIST)) /= DN_RULE loop
+	      DEF_LIST := TAIL(DEF_LIST);
+	    end loop;
+	    if not IS_EMPTY(DEF_LIST) then
+	      RTBL(RTBL_LAST).REPLACEMENT := HEAD(DEF_LIST);
+	      D(XD_RULE, SYL, HEAD(DEF_LIST));
+	    else
+	      D(XD_RULE, SYL, CONST_VOID);
+	    end if;
+	--else
+        --  ERROR(D(LX_SRCPOS,RULE),"Single terminal - "
+	--	    & PRINTNAME(D(XD_NAME,RULE)));
+	  end if;
+	end if;
+      end if;
+    end loop;
+    for I in 1 .. RTBL_LAST loop
+      PROPAGATE_REPLACEMENT(I, RTBL_LAST);
+    end loop;
+  end FIRST_PASS;
+
+  procedure PROPAGATE_REPLACEMENT(I, LIM: INTEGER) is
+    J:			INTEGER;
+  begin
+    if LIM <= 0 then
+      ERROR(D(LX_SRCPOS,RTBL(I).RULE),"Circular Replacement");
+    else
+      if KIND(RTBL(I).REPLACEMENT) = DN_RULE then
+	J := DI(XD_RULEINFO, RTBL(I).REPLACEMENT);
+	if KIND(RTBL(J).REPLACEMENT) = DN_RULE then
+	  PROPAGATE_REPLACEMENT(J, LIM - 1);
+	  RTBL(I).REPLACEMENT := RTBL(J).REPLACEMENT;
+	end if;
+      end if;
+    end if;
+  end PROPAGATE_REPLACEMENT;
+
+  procedure SECOND_PASS is
+    J:			INTEGER;
+    K:			INTEGER;
+    ALT_SEQ:		SEQ_TYPE;
+    SYL_SEQ:		SEQ_TYPE;
+    SYL:		TREE;
+    RULE:		TREE;
+    DEFLIST:		SEQ_TYPE;
+  begin
+    for I in 1 .. RTBL_LAST loop
+      declare
+	RTBL_I: 		RTBL_TYPE renames RTBL(I);
+      begin
+	if KIND(RTBL_I.REPLACEMENT) /= DN_RULE then
+	  ALT_SEQ := LIST(RTBL_I.RULE);
+	  while not IS_EMPTY(ALT_SEQ) loop
+	    SYL_SEQ := LIST(HEAD(ALT_SEQ));
+	    ALT_SEQ := TAIL(ALT_SEQ);
+	    while not IS_EMPTY(SYL_SEQ) loop
+	      SYL := HEAD(SYL_SEQ); SYL_SEQ := TAIL(SYL_SEQ);
+	      if KIND(SYL) = DN_NONTERMINAL then
+		DEFLIST := LIST(D(XD_SYMREP,SYL));
+		while not IS_EMPTY(DEFLIST)
+		and then KIND(HEAD(DEFLIST)) /= DN_RULE loop
+		  DEFLIST := TAIL(DEFLIST);
+		end loop;
+		if IS_EMPTY (DEFLIST) then
+		  RULE := CONST_VOID;
+		else
+		  RULE := HEAD(DEFLIST);
+		end if;
+		D(XD_RULE, SYL, RULE);
+		if KIND(RULE) /= DN_VOID then
+		  J := DI(XD_RULEINFO, RULE);
+		  declare
+		    RTBL_J: RTBL_TYPE renames RTBL(J);
+		  begin
+		    if KIND(RTBL_J.REPLACEMENT) /= DN_VOID then
+		      D(XD_SYMREP, SYL, D(XD_NAME, RTBL_J.REPLACEMENT));
+		      D(XD_RULE, SYL, RTBL_J.REPLACEMENT);
+		      K := DI(XD_RULEINFO,RTBL_J.REPLACEMENT);
+		      RTBL(K).USE_COUNT := RTBL(K).USE_COUNT + 1;
+		    else
+		      RTBL_J.USE_COUNT := RTBL_J.USE_COUNT + 1;
+		    end if;
+		  end;
+		end if;
+	      end if;
+	    end loop;
+	  end loop;
+	end if;
+      end;
+    end loop;
+  end SECOND_PASS;
+
+  procedure THIRD_PASS is
+    -- Replace one-use rules where used in alt with no semantics
+    ALT_SEQ:	SEQ_TYPE;
+  begin
+    for I in 1 .. RTBL_LAST loop
+      declare
+	RTBL_I: 	RTBL_TYPE renames RTBL(I);
+	ALT_LIST:	SEQ_TYPE;
+      begin
+	if KIND(RTBL_I.REPLACEMENT) /= DN_RULE then -- i.e., rule to be used
+--@       PUT(I,0);PUT(": ");PUT_LINE(PRINTNAME(D(XD_NAME,RTBL_I.RULE)));
+	  ALT_LIST := LIST(RTBL_I.RULE);
+	  REPLACE_ALTS(ALT_LIST);
+	  LIST(RTBL_I.RULE, ALT_LIST);
+	end if;
+      end;
+    end loop;
+  end THIRD_PASS;
+
+  procedure REPLACE_ALTS(ALT_LIST: in out SEQ_TYPE) is
+    ALT:	TREE;
+    SYL_LIST:	SEQ_TYPE;
+    SYL:	TREE;
+    RULE:	TREE;
+  begin
+    if IS_EMPTY(ALT_LIST) then
+      return;  -- all done
+    end if;
+    ALT := HEAD(ALT_LIST);
+    SYL_LIST := LIST(ALT);
+    if not IS_EMPTY(SYL_LIST)	       -- one syl rt side
+    and then IS_EMPTY(TAIL(SYL_LIST))  -- one syl rt side
+    and then IS_EMPTY(LIST(D(XD_SEMANTICS,ALT))) then  -- and no semantics
+      SYL := HEAD(SYL_LIST);
+      if KIND(SYL) = DN_NONTERMINAL then   -- it is a nonterminal
+	RULE := D(XD_RULE, SYL);
+	if RULE /= CONST_VOID then	-- it is defined (else err in initgrmr)
+--@       PUT("Checking: "); PUT_LINE(PRINTNAME(D(XD_NAME,RULE)));
+	  declare
+	    RTBL_I: RTBL_TYPE renames RTBL(DI(XD_RULEINFO, RULE));
+	  begin
+	    if RTBL_I.USE_COUNT = 1 then  -- it is used once
+--@           PUT_LINE("---Used once");
+	      RTBL_I.REPLACEMENT := CONST_FALSE;  -- mark replaced
+	      ALT_LIST := CATENATE(LIST(RTBL_I.RULE), TAIL(ALT_LIST));
+	      REPLACE_ALTS(ALT_LIST);
+	      return;
+	    end if;
+	  end;
+	end if;
+      end if;
+    end if;
+    -- did not replace; check tail
+    declare
+      ALT_LIST_TAIL: SEQ_TYPE  := TAIL(ALT_LIST);
+      NEW_ALT_LIST_TAIL: SEQ_TYPE := ALT_LIST_TAIL;
+    begin
+      REPLACE_ALTS(NEW_ALT_LIST_TAIL);
+      if ALT_LIST_TAIL = NEW_ALT_LIST_TAIL then
+	return;
+      end if;
+      ALT_LIST := INSERT(NEW_ALT_LIST_TAIL, HEAD(ALT_LIST));
+    end;
+  end REPLACE_ALTS;
+
+  function CATENATE(A,B: SEQ_TYPE) return SEQ_TYPE is
+  begin
+    if IS_EMPTY(B) then
+      return A;
+    elsif IS_EMPTY(A) then
+      return B;
+    else
+      return(INSERT(CATENATE(TAIL(A),B), HEAD(A)));
+    end if;
+  end CATENATE;
+
+  procedure REWRITE is
+    NEW_RULE_COUNT:	INTEGER := 0;
+    ONE_USE_COUNT:	INTEGER := 0;
+    RULE_SEQ:		SEQ_TYPE := MAKE;
+  begin
+    for I in 1 .. RTBL_LAST loop
+      declare
+	RTBL_I: 	RTBL_TYPE renames RTBL(I);
+      begin
+	if RTBL_I.REPLACEMENT = CONST_VOID then
+	  NEW_RULE_COUNT := NEW_RULE_COUNT + 1;
+	  RULE_SEQ := APPEND(RULE_SEQ, RTBL_I.RULE);
+	  if RTBL_I.USE_COUNT = 1 then
+	    ONE_USE_COUNT := ONE_USE_COUNT + 1;
+	  end if;
+	end if;
+      end;
+    end loop;
+    LIST(GRAMMAR, RULE_SEQ);
+    PUT("Rules:");PUT(RTBL_LAST);PUT(NEW_RULE_COUNT);NEW_LINE;
+    PUT(ONE_USE_COUNT,1);PUT_LINE(" rules with one use.");
+  end REWRITE;
+
+begin
+  PUT_LINE("Begin OPTRGRMR");
+  MAIN;
+  PUT_LINE("End OPTRGRMR");
+end OPTRGRMR;

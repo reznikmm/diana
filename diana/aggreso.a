@@ -1,0 +1,927 @@
+with DIANA, DIANATTR, DIANAMAN; use DIANA, DIANAMAN, DIANATTR;
+with EXPTYPE, EXPRESO; use EXPTYPE, EXPRESO;
+with VISUTIL; use VISUTIL;
+with DEFUTIL; use DEFUTIL;
+with REQUTIL; use REQUTIL;
+with UARITH;
+with MAKENOD;use MAKENOD;
+
+package body AGGRESO is
+
+    type ASSOC_CURSOR_TYPE is
+	record
+	    ASSOC_LIST: 	SEQ_TYPE;
+	    ASSOC:		TREE;
+	    EXP:		TREE;
+	    CHOICE_LIST:	SEQ_TYPE;
+	    CHOICE:		TREE;
+	    COUNT:		NATURAL;
+	    FIRST_COUNT:	POSITIVE;
+	end record;
+
+    procedure INIT_ASSOC_CURSOR
+		( ASSOC_CURSOR: 	out ASSOC_CURSOR_TYPE
+		; ASSOC_LIST:		SEQ_TYPE );
+    procedure ADVANCE_ASSOC_CURSOR (ASSOC_CURSOR: in out ASSOC_CURSOR_TYPE);
+    function VALUE_IS_IN_CHOICE_S(VALUE: TREE; CHOICE_S: TREE) return BOOLEAN;
+    procedure RESOLVE_RECORD_AGGREGATE(EXP: TREE; TYPE_STRUCT: TREE);
+    procedure RESOLVE_ERRONEOUS_AGGREGATE(EXP: TREE);
+    procedure RESOLVE_ARRAY_SUBAGGREGATE
+	    ( EXP:		TREE
+	    ; COMP_TYPE:	TREE
+	    ; INDEX_LIST:	SEQ_TYPE
+	    ; SCALAR_LIST:	in out SEQ_TYPE
+	    ; NAMED_OTHERS_OK:	BOOLEAN := FALSE );
+    procedure RESOLVE_STRING_SUBAGGREGATE
+	    ( EXP:		TREE
+	    ; COMP_TYPE:	TREE
+	    ; INDEX:		TREE
+	    ; SCALAR_LIST:	in out SEQ_TYPE );
+    procedure MAKE_NORMALIZED_LIST
+		( AGGREGATE_ARRAY: in out AGGREGATE_ARRAY_TYPE
+		; NORMALIZED_LIST: out SEQ_TYPE );
+
+    -- $$$$ shouldn't be here
+    function GET_SUBTYPE_OF_ID (ID: TREE) return TREE is
+	-- gets subtype corresponding to component id
+	RESULT: TREE := D(SM_OBJ_TYPE, ID);
+    begin
+	if KIND(RESULT) in DN_PRIVATE .. DN_L_PRIVATE then
+	    RESULT := D(SM_TYPE_SPEC, RESULT);
+	elsif KIND(RESULT) = DN_INCOMPLETE
+	and then D(XD_FULL_TYPE_SPEC, RESULT) /= CONST_VOID then
+	    RESULT := D(XD_FULL_TYPE_SPEC, RESULT);
+	end if;
+	return RESULT;
+    end;
+
+
+    procedure INIT_ASSOC_CURSOR
+		( ASSOC_CURSOR: 	out ASSOC_CURSOR_TYPE
+		; ASSOC_LIST:		SEQ_TYPE )
+    is
+	-- initialize cumulative fields of assoc_cursor record
+    begin
+	ASSOC_CURSOR.ASSOC_LIST := ASSOC_LIST;
+	ASSOC_CURSOR.CHOICE_LIST := MAKE;
+	ASSOC_CURSOR.COUNT := 0;
+    end INIT_ASSOC_CURSOR;
+
+    procedure ADVANCE_ASSOC_CURSOR (ASSOC_CURSOR: in out ASSOC_CURSOR_TYPE) is
+	-- advance assoc_cursor to next choice
+    begin
+
+	-- if there are remaining choices in current choice list
+	if not IS_EMPTY(ASSOC_CURSOR.CHOICE_LIST) then
+
+	    -- step to the next one
+	    POP(ASSOC_CURSOR.CHOICE_LIST, ASSOC_CURSOR.CHOICE);
+	    ASSOC_CURSOR.COUNT := ASSOC_CURSOR.COUNT + 1;
+
+	-- else if there are remaining associations
+	elsif not IS_EMPTY (ASSOC_CURSOR.ASSOC_LIST) then
+
+	    -- step to the next association
+	    POP(ASSOC_CURSOR.ASSOC_LIST, ASSOC_CURSOR.ASSOC);
+	    ASSOC_CURSOR.COUNT := ASSOC_CURSOR.COUNT + 1;
+	    ASSOC_CURSOR.FIRST_COUNT := ASSOC_CURSOR.COUNT;
+
+	    -- if it is a named association
+	    if KIND(ASSOC_CURSOR.ASSOC) = DN_NAMED then
+
+		-- save the expression
+		ASSOC_CURSOR.EXP := D(AS_EXP, ASSOC_CURSOR.ASSOC);
+
+		-- get the list of choices
+		ASSOC_CURSOR.CHOICE_LIST
+			:= LIST(D(AS_CHOICE_S, ASSOC_CURSOR.ASSOC));
+
+		-- step to the first choice
+		POP(ASSOC_CURSOR.CHOICE_LIST, ASSOC_CURSOR.CHOICE);
+
+	    -- else -- since it is not a named association
+	    else
+
+		-- save the expression
+		ASSOC_CURSOR.EXP := ASSOC_CURSOR.ASSOC;
+
+		-- set choice to void
+		ASSOC_CURSOR.CHOICE := CONST_VOID;
+
+	-- else -- since there are no more associations
+	    end if;
+	else
+
+	    -- set the .Assoc field to void to indicate termination
+	    ASSOC_CURSOR.ASSOC := CONST_VOID;
+	end if;
+    end ADVANCE_ASSOC_CURSOR;
+
+    function COUNT_AGGREGATE_CHOICES(ASSOC_S: TREE) return NATURAL is
+	-- count the number of distinct choices in a list of associations
+	-- ... (either in a discriminant constraint or an aggregate)
+
+	ASSOC_CURSOR:	ASSOC_CURSOR_TYPE;
+    begin
+
+	-- step through choices
+	INIT_ASSOC_CURSOR(ASSOC_CURSOR, LIST(ASSOC_S));
+	loop
+	    ADVANCE_ASSOC_CURSOR(ASSOC_CURSOR);
+	    exit
+		when ASSOC_CURSOR.ASSOC = CONST_VOID;
+	end loop;
+
+	-- return the count from the cursor
+	return ASSOC_CURSOR.COUNT;
+    end COUNT_AGGREGATE_CHOICES;
+
+    procedure SPREAD_ASSOC_S
+		( ASSOC_S:		TREE
+		; AGGREGATE_ARRAY:	in out AGGREGATE_ARRAY_TYPE )
+    is
+	-- spread elements of an assoc_s for an aggregate into
+	-- ... an aggregate array (which is known to be of correct size).
+
+	ASSOC_CURSOR: ASSOC_CURSOR_TYPE;
+    begin
+
+	-- for each array element and corresponding choice
+	INIT_ASSOC_CURSOR(ASSOC_CURSOR, LIST(ASSOC_S));
+        for I in AGGREGATE_ARRAY'RANGE loop
+	    ADVANCE_ASSOC_CURSOR(ASSOC_CURSOR);
+
+	    -- fill in fields of aggregate_array
+	    AGGREGATE_ARRAY(I).FIRST := ASSOC_CURSOR.FIRST_COUNT;
+	    AGGREGATE_ARRAY(I).CHOICE := ASSOC_CURSOR.CHOICE;
+	    AGGREGATE_ARRAY(I).SEEN := FALSE;
+	    AGGREGATE_ARRAY(I).RESOLVED := FALSE;
+	    AGGREGATE_ARRAY(I).ID := CONST_VOID;
+
+	    -- fill in exp and evaluate types for first choice of assoc
+	    if I = ASSOC_CURSOR.FIRST_COUNT then
+		AGGREGATE_ARRAY(I).ASSOC := ASSOC_CURSOR.ASSOC;
+		AGGREGATE_ARRAY(I).EXP := ASSOC_CURSOR.EXP;
+		EVAL_EXP_TYPES
+			( AGGREGATE_ARRAY(I).EXP
+			, AGGREGATE_ARRAY(I).TYPESET );
+	    end if;
+	end loop;
+
+    end SPREAD_ASSOC_S;
+
+
+    procedure WALK_RECORD_DECL_S
+		( EXP:			TREE
+		; DECL_S:		TREE
+		; AGGREGATE_ARRAY:	in out AGGREGATE_ARRAY_TYPE
+		; NORMALIZED_LIST:	in out SEQ_TYPE
+		; LAST_POSITIONAL:	in out NATURAL )
+    is
+	-- walk one sequence of component declarations for a record
+	-- (there is one such for discriminants and one for comp_list)
+
+	PARAM_CURSOR:	PARAM_CURSOR_TYPE;
+	NAMED_SUB:	NATURAL;
+	CHOICE: 	TREE;
+    begin
+
+	-- for each component declared in the decl_s
+	INIT_PARAM_CURSOR(PARAM_CURSOR, LIST(DECL_S));
+	loop
+	    ADVANCE_PARAM_CURSOR(PARAM_CURSOR);
+	    exit
+		when PARAM_CURSOR.ID = CONST_VOID;
+
+	    -- if it matches a positional parameter
+            if LAST_POSITIONAL < AGGREGATE_ARRAY'LAST
+	    and then AGGREGATE_ARRAY(LAST_POSITIONAL + 1).CHOICE = CONST_VOID
+	    then
+
+		-- mark positional parameter seen
+		LAST_POSITIONAL := LAST_POSITIONAL + 1;
+		AGGREGATE_ARRAY(LAST_POSITIONAL).SEEN := TRUE;
+		AGGREGATE_ARRAY(LAST_POSITIONAL).RESOLVED := TRUE;
+		AGGREGATE_ARRAY(LAST_POSITIONAL).ID := PARAM_CURSOR.ID;
+
+		-- check type and resolve expression
+		REQUIRE_TYPE
+			( GET_BASE_TYPE(PARAM_CURSOR.ID)
+			, AGGREGATE_ARRAY(LAST_POSITIONAL).EXP
+			, AGGREGATE_ARRAY(LAST_POSITIONAL).TYPESET );
+		AGGREGATE_ARRAY(LAST_POSITIONAL).EXP := RESOLVE_EXP_OR_AGGREGATE
+			( AGGREGATE_ARRAY(LAST_POSITIONAL).EXP
+			, GET_SUBTYPE_OF_ID(PARAM_CURSOR.ID)
+			, NAMED_OTHERS_OK => TRUE );
+
+		-- add expression to normalized list
+		NORMALIZED_LIST := APPEND
+			( NORMALIZED_LIST
+			, AGGREGATE_ARRAY(LAST_POSITIONAL).EXP );
+
+	    -- else -- since no more positional parameters
+	    else
+
+		-- search for matching name
+		NAMED_SUB := LAST_POSITIONAL;
+		loop
+		    NAMED_SUB := NAMED_SUB + 1;
+		    exit
+                        when NAMED_SUB > AGGREGATE_ARRAY'LAST;
+		    CHOICE := AGGREGATE_ARRAY(NAMED_SUB).CHOICE;
+		    exit
+			when KIND(CHOICE) = DN_CHOICE_OTHERS;
+		    exit
+			when not AGGREGATE_ARRAY(NAMED_SUB).SEEN
+			and then KIND(CHOICE) = DN_CHOICE_EXP
+			and then KIND(D(AS_EXP,CHOICE)) in CLASS_DESIGNATOR
+			and then D(LX_SYMREP, D(AS_EXP,CHOICE))
+				= D(LX_SYMREP, PARAM_CURSOR.ID);
+		end loop;
+
+		-- if match was found
+                if NAMED_SUB <= AGGREGATE_ARRAY'LAST then
+
+		    -- mark named parameter seen
+		    AGGREGATE_ARRAY(NAMED_SUB).SEEN := TRUE;
+		    AGGREGATE_ARRAY(NAMED_SUB).ID := PARAM_CURSOR.ID;
+
+		    -- replace choice_exp expression with used_name_id
+		    if KIND(AGGREGATE_ARRAY(NAMED_SUB).CHOICE) = DN_CHOICE_EXP
+		    then
+			D(AS_EXP, AGGREGATE_ARRAY(NAMED_SUB).CHOICE
+				, MAKE_USED_NAME_ID_FROM_OBJECT
+				     ( D(AS_EXP
+					 , AGGREGATE_ARRAY(NAMED_SUB).CHOICE)));
+			D(SM_DEFN, D(AS_EXP,AGGREGATE_ARRAY(NAMED_SUB).CHOICE)
+				, PARAM_CURSOR.ID );
+		    end if;
+
+		    -- check type (for first choice of an association)
+		    -- ... (Note. gives error if conflicting types in assoc)
+		    NAMED_SUB := AGGREGATE_ARRAY(NAMED_SUB).FIRST;
+		    REQUIRE_TYPE
+			    ( GET_BASE_TYPE(PARAM_CURSOR.ID)
+			    , AGGREGATE_ARRAY(NAMED_SUB).EXP
+			    , AGGREGATE_ARRAY(NAMED_SUB).TYPESET );
+
+		    -- resolve, if this exp not already resolved
+		    if not AGGREGATE_ARRAY(NAMED_SUB).RESOLVED then
+			AGGREGATE_ARRAY(NAMED_SUB).EXP
+				:= RESOLVE_EXP_OR_AGGREGATE
+					( AGGREGATE_ARRAY(NAMED_SUB).EXP
+					, GET_SUBTYPE_OF_ID(PARAM_CURSOR.ID)
+					, NAMED_OTHERS_OK => TRUE );
+			AGGREGATE_ARRAY(NAMED_SUB).RESOLVED := TRUE;
+		    end if;
+
+		    -- add expression to normalized list
+		    NORMALIZED_LIST := APPEND
+			    ( NORMALIZED_LIST
+			    , AGGREGATE_ARRAY(NAMED_SUB).EXP );
+
+		-- else -- since no match was found
+		else
+
+		    -- indicate error
+		    ERROR(D(LX_SRCPOS,EXP)
+                                , "No value for component - "
+				  & PRINTNAME(D(LX_SYMREP, PARAM_CURSOR.ID)) );
+		end if;
+	    end if;
+	end loop;
+    end WALK_RECORD_DECL_S;
+
+
+    procedure RESOLVE_RECORD_ASSOC_S
+		( ASSOC_S:		TREE
+		; AGGREGATE_ARRAY:	in out AGGREGATE_ARRAY_TYPE )
+    is
+	-- resolve elements of an assoc_s for an aggregate
+	-- ... (individual expressions have been resolved)
+
+	NEW_ASSOC: TREE;
+	NEW_ASSOC_LIST: SEQ_TYPE := MAKE;
+	NEW_CHOICE_LIST: SEQ_TYPE;
+    begin
+
+	-- for each array element and corresponding choice
+        for I in AGGREGATE_ARRAY'RANGE loop
+
+	    -- if element is first choice of an association
+	    if I = AGGREGATE_ARRAY(I).FIRST then
+
+		-- make sure that expression has been resolved
+		if not AGGREGATE_ARRAY(I).RESOLVED then
+		    AGGREGATE_ARRAY(I).EXP := RESOLVE_EXP
+			    ( AGGREGATE_ARRAY(I).EXP
+			    , CONST_VOID );
+
+		-- replace resolved expression
+		end if;
+		if AGGREGATE_ARRAY(I).CHOICE = CONST_VOID then
+		    NEW_ASSOC := AGGREGATE_ARRAY(I).EXP;
+		else
+		    NEW_ASSOC := AGGREGATE_ARRAY(I).ASSOC;
+		    D(AS_EXP, NEW_ASSOC, AGGREGATE_ARRAY(I).EXP);
+		end if;
+
+		-- add association to new list;
+		NEW_ASSOC_LIST := APPEND(NEW_ASSOC_LIST, NEW_ASSOC);
+	    end if;
+
+	    -- check that choice existed in type
+	    if not AGGREGATE_ARRAY(I).SEEN then
+		if AGGREGATE_ARRAY(I).CHOICE = CONST_VOID then
+                    ERROR(D(LX_SRCPOS,NEW_ASSOC), "No matching component");
+		elsif KIND(AGGREGATE_ARRAY(I).CHOICE) = DN_CHOICE_EXP then
+		    if KIND(D(AS_EXP, AGGREGATE_ARRAY(I).CHOICE))
+				= DN_USED_OBJECT_ID
+		    then
+			ERROR(D(LX_SRCPOS,AGGREGATE_ARRAY(I).CHOICE)
+                                , "No matching component for - "
+				    & PRINTNAME(D(LX_SYMREP
+				      ,D(AS_EXP, AGGREGATE_ARRAY(I).CHOICE) )));
+		    else
+			ERROR(D(LX_SRCPOS,AGGREGATE_ARRAY(I).CHOICE)
+                                , "Simple name required");
+		    end if;
+		elsif KIND(AGGREGATE_ARRAY(I).CHOICE) = DN_CHOICE_EXP then
+		    ERROR(D(LX_SRCPOS,AGGREGATE_ARRAY(I).CHOICE)
+                                , "Range not allowed");
+		else -- since kind(...) = dn_choice_others
+		    ERROR(D(LX_SRCPOS,AGGREGATE_ARRAY(I).CHOICE)
+                                , "No matching component for others");
+		end if;
+	    end if;
+	end loop;
+
+	-- insert resolved list in assoc_s
+	LIST(ASSOC_S, NEW_ASSOC_LIST);
+    end RESOLVE_RECORD_ASSOC_S;
+
+
+    function RESOLVE_EXP_OR_AGGREGATE
+		( EXP:			TREE
+		; SUBTYPE_SPEC: 	TREE
+		; NAMED_OTHERS_OK:	BOOLEAN )
+	    return TREE
+    is
+	SCALAR_LIST: SEQ_TYPE := MAKE;
+    begin
+	if KIND(SUBTYPE_SPEC) = DN_CONSTRAINED_ARRAY then
+	    -- $$$$ need to pass subtypes of indexes
+	    if KIND(EXP) = DN_AGGREGATE then
+		RESOLVE_ARRAY_SUBAGGREGATE
+		    ( EXP
+		    , D(SM_COMP_TYPE, GET_BASE_STRUCT(SUBTYPE_SPEC))
+		    , LIST(D(SM_INDEX_S, GET_BASE_STRUCT(SUBTYPE_SPEC)))
+		    , SCALAR_LIST
+		    , NAMED_OTHERS_OK );
+		D(SM_EXP_TYPE, EXP, SUBTYPE_SPEC);
+	    elsif KIND(EXP) = DN_STRING_LITERAL then
+		RESOLVE_STRING_SUBAGGREGATE
+		    ( EXP
+		    , D(SM_COMP_TYPE, GET_BASE_STRUCT(SUBTYPE_SPEC))
+		    , HEAD(LIST(D(SM_INDEX_S
+			    , GET_BASE_STRUCT(SUBTYPE_SPEC))))
+		    , SCALAR_LIST );
+		D(SM_EXP_TYPE, EXP, SUBTYPE_SPEC);
+	    else
+		return RESOLVE_EXP(EXP, GET_BASE_TYPE(SUBTYPE_SPEC));
+	    end if;
+	else
+	    return RESOLVE_EXP(EXP, GET_BASE_TYPE(SUBTYPE_SPEC));
+	end if;
+	return EXP;
+    end RESOLVE_EXP_OR_AGGREGATE;
+
+
+    procedure RESOLVE_AGGREGATE
+		( EXP:			TREE
+		; TYPE_SPEC:		TREE )
+    is
+	TYPE_STRUCT: TREE := GET_BASE_STRUCT(TYPE_SPEC);
+	SCALAR_LIST: SEQ_TYPE := MAKE;
+    begin
+	if KIND(TYPE_STRUCT) = DN_RECORD then
+	    RESOLVE_RECORD_AGGREGATE(EXP, TYPE_STRUCT);
+	    D(SM_EXP_TYPE, EXP, TYPE_SPEC);
+	elsif KIND(TYPE_STRUCT) = DN_ARRAY then
+	    RESOLVE_ARRAY_SUBAGGREGATE
+		( EXP
+		, D(SM_COMP_TYPE, GET_BASE_STRUCT(TYPE_SPEC))
+		, LIST(D(SM_INDEX_S, GET_BASE_STRUCT(TYPE_SPEC)))
+		, SCALAR_LIST );
+	    D(SM_EXP_TYPE, EXP, TYPE_SPEC);
+	else
+	    RESOLVE_ERRONEOUS_AGGREGATE(EXP);
+	end if;
+    end RESOLVE_AGGREGATE;
+
+
+    procedure RESOLVE_STRING
+		( EXP:			TREE
+		; TYPE_SPEC:		TREE )
+    is
+	SCALAR_LIST: SEQ_TYPE := MAKE;
+	TYPE_STRUCT: TREE := GET_BASE_TYPE(TYPE_SPEC);
+	COMP_TYPE: TREE := CONST_VOID;
+	INDEX_TYPE: TREE := CONST_VOID;
+    begin
+	if TYPE_STRUCT /= CONST_VOID then
+	    COMP_TYPE := D(SM_COMP_TYPE, TYPE_STRUCT);
+	    INDEX_TYPE := HEAD(LIST(D(SM_INDEX_S, TYPE_STRUCT)));
+	end if;
+	RESOLVE_STRING_SUBAGGREGATE
+		( EXP
+		, GET_BASE_TYPE(COMP_TYPE)
+		, INDEX_TYPE
+		, SCALAR_LIST );
+    end RESOLVE_STRING;
+
+
+    procedure RESOLVE_ERRONEOUS_AGGREGATE(EXP: TREE) is
+	-- type wrong for aggregate or unresolved
+	-- check expressions anyway
+	GENERAL_ASSOC_S: constant TREE := D(AS_GENERAL_ASSOC_S, EXP);
+	ASSOC_COUNT: NATURAL := COUNT_AGGREGATE_CHOICES(GENERAL_ASSOC_S);
+	AGGREGATE_ARRAY: AGGREGATE_ARRAY_TYPE(1..ASSOC_COUNT);
+	TEMP_EXP: TREE;
+    begin
+	D(SM_EXP_TYPE, EXP, CONST_VOID);
+	SPREAD_ASSOC_S(GENERAL_ASSOC_S, AGGREGATE_ARRAY);
+        for I in AGGREGATE_ARRAY'RANGE loop
+	    if AGGREGATE_ARRAY(I).FIRST = I then
+		TEMP_EXP := RESOLVE_EXP(AGGREGATE_ARRAY(I).EXP, CONST_VOID);
+	    end if;
+	end loop;
+    end RESOLVE_ERRONEOUS_AGGREGATE;
+
+
+    procedure RESOLVE_RECORD_AGGREGATE(EXP: TREE; TYPE_STRUCT: TREE) is
+	GENERAL_ASSOC_S: constant TREE := D(AS_GENERAL_ASSOC_S, EXP);
+	ASSOC_COUNT: NATURAL := COUNT_AGGREGATE_CHOICES(GENERAL_ASSOC_S);
+	AGGREGATE_ARRAY: AGGREGATE_ARRAY_TYPE(1..ASSOC_COUNT);
+	LAST_POSITIONAL: NATURAL := 0;
+	COMP_LIST: TREE := D(SM_COMP_LIST, TYPE_STRUCT);
+	VARIANT_PART: TREE;
+	NORMALIZED_LIST: SEQ_TYPE := MAKE;
+    begin
+	D(SM_DISCRETE_RANGE, EXP, CONST_VOID);
+
+	SPREAD_ASSOC_S(GENERAL_ASSOC_S, AGGREGATE_ARRAY);
+	WALK_RECORD_DECL_S
+		( EXP
+		, D(SM_DISCRIMINANT_S, TYPE_STRUCT)
+		, AGGREGATE_ARRAY
+		, NORMALIZED_LIST
+		, LAST_POSITIONAL );
+	while COMP_LIST /= CONST_VOID loop
+	    WALK_RECORD_DECL_S
+		    ( EXP
+		    , D(AS_DECL_S, COMP_LIST)
+		    , AGGREGATE_ARRAY
+		    , NORMALIZED_LIST
+		    , LAST_POSITIONAL );
+	    VARIANT_PART := D(AS_VARIANT_PART,COMP_LIST);
+	    COMP_LIST := CONST_VOID;
+	    if VARIANT_PART /= CONST_VOID then
+		-- there is a variant part
+		declare
+		    DSCRMT_ID: constant TREE
+			    := D(SM_DEFN,D(AS_NAME,VARIANT_PART));
+		    DSCRMT_EXP: TREE := CONST_VOID;
+		    DSCRMT_VALUE: TREE;
+		    VARIANT_LIST: SEQ_TYPE
+			    := LIST(D(AS_VARIANT_S,VARIANT_PART));
+		    VARIANT: TREE;
+		begin
+                    for I in AGGREGATE_ARRAY'RANGE loop
+			if (DSCRMT_ID = AGGREGATE_ARRAY(I).ID
+				and then DSCRMT_ID /= CONST_VOID)
+			or else KIND(AGGREGATE_ARRAY(I).CHOICE)
+				= DN_CHOICE_OTHERS
+			then
+			    DSCRMT_EXP := AGGREGATE_ARRAY
+					(AGGREGATE_ARRAY(I).FIRST)
+					.EXP;
+			    exit;
+			end if;
+		    end loop;
+		    if DSCRMT_EXP = CONST_VOID then
+                        ERROR(D(LX_SRCPOS,EXP), "$$$$ dscrmt value not found");
+			exit;
+		    end if;
+		    DSCRMT_VALUE := GET_STATIC_VALUE(DSCRMT_EXP);
+		    if DSCRMT_VALUE = CONST_VOID then
+                        ERROR(D(LX_SRCPOS,EXP), "Dscrmt value must be static");
+			exit;
+		    end if;
+		    while not IS_EMPTY(VARIANT_LIST) loop
+			POP(VARIANT_LIST, VARIANT);
+			if KIND(VARIANT) = DN_VARIANT then
+			    if VALUE_IS_IN_CHOICE_S
+					(DSCRMT_VALUE, D(AS_CHOICE_S, VARIANT))
+			    then
+				COMP_LIST := D(AS_COMP_LIST,VARIANT);
+				exit;
+			    end if;
+			end if;
+		    end loop;
+		    if COMP_LIST = CONST_VOID then
+                        ERROR(D(LX_SRCPOS,EXP), "No variant for dscrmt value");
+			exit;
+		    end if;
+		end;
+	    end if;
+	end loop;
+	RESOLVE_RECORD_ASSOC_S(GENERAL_ASSOC_S, AGGREGATE_ARRAY);
+	D(SM_NORMALIZED_COMP_S
+		, EXP
+		, MAKE_GENERAL_ASSOC_S(LIST => NORMALIZED_LIST));
+    end RESOLVE_RECORD_AGGREGATE;
+
+    function VALUE_IS_IN_CHOICE_S(VALUE: TREE; CHOICE_S: TREE) return BOOLEAN is
+
+	use UARITH;
+
+	CHOICE_LIST: SEQ_TYPE := LIST(CHOICE_S);
+	CHOICE: TREE;
+    begin
+	while not IS_EMPTY(CHOICE_LIST) loop
+	    POP(CHOICE_LIST, CHOICE);
+	    case KIND(CHOICE) is
+	    when DN_CHOICE_EXP =>
+		if U_EQUAL(GET_STATIC_VALUE(D(AS_EXP,CHOICE)), VALUE) then
+		    return TRUE;
+		end if;
+	    when DN_CHOICE_RANGE =>
+		if U_MEMBER(VALUE, D(AS_DISCRETE_RANGE, CHOICE)) then
+		    return TRUE;
+		end if;
+	    when DN_CHOICE_OTHERS =>
+		return TRUE;
+	    when others =>
+		null;
+	    end case;
+	end loop;
+	return FALSE;
+    end VALUE_IS_IN_CHOICE_S;
+
+
+    function GET_STRING_LENGTH(TXT: STRING) return NATURAL is
+	COL:	NATURAL := 2;
+	COUNT:	NATURAL := 0;
+    begin
+        while COL < TXT'LENGTH loop
+	    COUNT := COUNT + 1;
+	    if TXT(COL) = TXT(1) then
+		COL := COL + 1;
+	    end if;
+	    COL := COL + 1;
+	end loop;
+	return COUNT;
+    end GET_STRING_LENGTH;
+
+    procedure RESOLVE_ARRAY_SUBAGGREGATE
+	    ( EXP:		TREE
+	    ; COMP_TYPE:	TREE
+	    ; INDEX_LIST:	SEQ_TYPE
+	    ; SCALAR_LIST:	in out SEQ_TYPE
+	    ; NAMED_OTHERS_OK:	BOOLEAN := FALSE )
+    is
+	GENERAL_ASSOC_S: TREE := D(AS_GENERAL_ASSOC_S, EXP);
+	INDEX:		TREE := HEAD(INDEX_LIST);
+	INDEX_TAIL:	SEQ_TYPE := TAIL(INDEX_LIST);
+	ASSOC_COUNT:	NATURAL := COUNT_AGGREGATE_CHOICES(GENERAL_ASSOC_S);
+	AGGREGATE_ARRAY:AGGREGATE_ARRAY_TYPE(1..ASSOC_COUNT);
+	TYPESET:	TYPESET_TYPE;
+	NEW_ASSOC_LIST: SEQ_TYPE := MAKE;
+	CHOICE: 	TREE;
+	INDEX_TYPE:	TREE;
+	POSITIONAL_SEEN:BOOLEAN := FALSE;
+	NAMED_SEEN:	BOOLEAN := FALSE;
+	OTHERS_SEEN:	BOOLEAN := FALSE;
+	IS_RANGE:	BOOLEAN;
+    begin
+
+	D(SM_EXP_TYPE, EXP, CONST_VOID);
+	D(SM_DISCRETE_RANGE, EXP, CONST_VOID);
+
+	-- spread aggregate into array
+	SPREAD_ASSOC_S(GENERAL_ASSOC_S, AGGREGATE_ARRAY);
+
+	-- resolve subexpressions
+	if IS_EMPTY(INDEX_TAIL) then
+            for I in AGGREGATE_ARRAY'RANGE loop
+		if AGGREGATE_ARRAY(I).FIRST = I then
+		    TYPESET := AGGREGATE_ARRAY(I).TYPESET;
+		    REQUIRE_TYPE( GET_BASE_TYPE(COMP_TYPE)
+				, AGGREGATE_ARRAY(I).EXP
+				, TYPESET);
+		    AGGREGATE_ARRAY(I).EXP := RESOLVE_EXP_OR_AGGREGATE
+				( AGGREGATE_ARRAY(I).EXP
+				, COMP_TYPE
+				, NAMED_OTHERS_OK => TRUE );
+		end if;
+	    end loop;
+	else
+            for I in AGGREGATE_ARRAY'RANGE loop
+		if AGGREGATE_ARRAY(I).FIRST = I then
+		    if KIND(AGGREGATE_ARRAY(I).EXP) = DN_AGGREGATE then
+			RESOLVE_ARRAY_SUBAGGREGATE
+				( AGGREGATE_ARRAY(I).EXP
+				, COMP_TYPE
+				, INDEX_TAIL
+				, SCALAR_LIST
+				, NAMED_OTHERS_OK );
+		    elsif KIND(AGGREGATE_ARRAY(I).EXP) = DN_STRING_LITERAL
+		    and then IS_EMPTY(TAIL(INDEX_TAIL))
+		    and then ( IS_CHARACTER_TYPE(GET_BASE_TYPE(COMP_TYPE))
+			       or else COMP_TYPE = CONST_VOID )
+		    then
+			RESOLVE_STRING_SUBAGGREGATE
+				( AGGREGATE_ARRAY(I).EXP
+				, COMP_TYPE
+				, HEAD(INDEX_TAIL)
+				, SCALAR_LIST );
+		    else
+			ERROR(D(LX_SRCPOS,AGGREGATE_ARRAY(I).EXP)
+                                , "Invalid form for subaggregate" );
+			EVAL_EXP_TYPES(AGGREGATE_ARRAY(I).EXP, TYPESET);
+			AGGREGATE_ARRAY(I).EXP := RESOLVE_EXP
+				( AGGREGATE_ARRAY(I).EXP, CONST_VOID );
+		    end if;
+		end if;
+	    end loop;
+	end if;
+
+	-- construct new assoc list
+        for I in AGGREGATE_ARRAY'RANGE loop
+	    if AGGREGATE_ARRAY(I).FIRST = I then
+		if AGGREGATE_ARRAY(I).CHOICE = CONST_VOID then
+		    AGGREGATE_ARRAY(I).ASSOC := AGGREGATE_ARRAY(I).EXP;
+		    POSITIONAL_SEEN := TRUE;
+		else
+		    D(AS_EXP, AGGREGATE_ARRAY(I).ASSOC
+				, AGGREGATE_ARRAY(I).EXP );
+		    if KIND(AGGREGATE_ARRAY(I).CHOICE) = DN_CHOICE_OTHERS then
+			OTHERS_SEEN := TRUE;
+		    else
+			NAMED_SEEN := TRUE;
+		    end if;
+		end if;
+		NEW_ASSOC_LIST := APPEND
+			( NEW_ASSOC_LIST, AGGREGATE_ARRAY(I).ASSOC );
+	    end if;
+	end loop;
+
+	-- replace list in general_assoc_s with resolved list
+	if POSITIONAL_SEEN then
+	    LIST(GENERAL_ASSOC_S, NEW_ASSOC_LIST);
+	end if;
+
+	-- if a named association was seen
+	if NAMED_SEEN then
+
+	    if POSITIONAL_SEEN then
+		ERROR(D(LX_SRCPOS,EXP),
+                        "Positional and named associations not allowed");
+	    elsif not NAMED_OTHERS_OK
+	    and OTHERS_SEEN then
+		ERROR(D(LX_SRCPOS,EXP),
+                        "Named associations not allowed with others");
+	    end if;
+
+	    -- evaluate choices
+	    if KIND(INDEX) = DN_INDEX then
+		-- (Note.  Anon index base type may have void expression)
+		INDEX_TYPE := D(SM_TYPE_SPEC, INDEX);
+	    else
+		INDEX_TYPE := INDEX;
+	    end if;
+	    INDEX_TYPE := GET_BASE_TYPE(INDEX_TYPE);
+            for I in AGGREGATE_ARRAY'RANGE loop
+		CHOICE := AGGREGATE_ARRAY(I).CHOICE;
+		case KIND(CHOICE) is
+		when DN_CHOICE_EXP =>
+		    EVAL_EXP_SUBTYPE_TYPES
+			    ( D(AS_EXP, CHOICE), TYPESET, IS_RANGE );
+		    REQUIRE_TYPE(INDEX_TYPE, D(AS_EXP,CHOICE), TYPESET);
+		    if IS_RANGE then
+			CHOICE := MAKE_CHOICE_RANGE
+				( LX_SRCPOS => D(LX_SRCPOS, CHOICE)
+				, AS_DISCRETE_RANGE
+					=> RESOLVE_DISCRETE_RANGE
+						( D(AS_EXP, CHOICE)
+						, GET_THE_TYPE(TYPESET) ));
+			AGGREGATE_ARRAY(I).CHOICE := CHOICE;
+			if AGGREGATE_ARRAY(I).FIRST = I
+			and then IS_EMPTY(TAIL(LIST(D(AS_CHOICE_S
+				, AGGREGATE_ARRAY(I).ASSOC))))
+			then
+			    -- replace singleton list
+			    LIST(D(AS_CHOICE_S,AGGREGATE_ARRAY(I).ASSOC)
+				    , SINGLETON(CHOICE) );
+			end if;
+		    else
+			D(AS_EXP
+				, CHOICE
+				, RESOLVE_EXP(D(AS_EXP,CHOICE) ,TYPESET) );
+		    end if;
+		when DN_CHOICE_RANGE =>
+		    EVAL_DISCRETE_RANGE
+			    ( D(AS_DISCRETE_RANGE, CHOICE), TYPESET );
+		    REQUIRE_TYPE( INDEX_TYPE
+				, D(AS_DISCRETE_RANGE,CHOICE)
+				, TYPESET);
+		    D(AS_DISCRETE_RANGE
+			    , CHOICE
+			    , RESOLVE_DISCRETE_RANGE
+					( D(AS_DISCRETE_RANGE, CHOICE)
+					, GET_THE_TYPE(TYPESET)));
+		when DN_CHOICE_OTHERS =>
+		    null;
+		when others => null;
+		end case;
+	    end loop;
+	    MAKE_NORMALIZED_LIST(AGGREGATE_ARRAY, NEW_ASSOC_LIST);
+	    GENERAL_ASSOC_S := COPY_NODE(GENERAL_ASSOC_S);
+	    LIST(GENERAL_ASSOC_S, NEW_ASSOC_LIST);
+	end if;
+
+	D(SM_NORMALIZED_COMP_S
+		, EXP
+		, GENERAL_ASSOC_S );
+
+    end RESOLVE_ARRAY_SUBAGGREGATE;
+
+
+    procedure RESOLVE_STRING_SUBAGGREGATE
+	    ( EXP:		TREE
+	    ; COMP_TYPE:	TREE
+	    ; INDEX:		TREE
+	    ; SCALAR_LIST:	in out SEQ_TYPE )
+    is
+    begin
+	D(SM_EXP_TYPE, EXP, CONST_VOID);
+	D(SM_DISCRETE_RANGE, EXP, CONST_VOID);
+	null;
+    end RESOLVE_STRING_SUBAGGREGATE;
+
+
+    procedure MAKE_NORMALIZED_LIST
+		( AGGREGATE_ARRAY: in out AGGREGATE_ARRAY_TYPE
+		; NORMALIZED_LIST: out SEQ_TYPE )
+    is
+	-- makes normalized list for array aggregate
+	AGGREGATE_ITEM: AGGREGATE_ITEM_TYPE;
+	NEW_NORMALIZED_LIST: SEQ_TYPE := MAKE;
+	NON_STATIC_SEEN: BOOLEAN := FALSE;
+	CHOICE: TREE;
+	RANGE_NODE: TREE;
+    begin
+	NORMALIZED_LIST := MAKE;
+
+	-- for each choice
+        for II in AGGREGATE_ARRAY'RANGE loop
+
+            -- make sure it has its own 'named' node which can be
+	    -- modified if necessary
+	    if AGGREGATE_ARRAY(II).FIRST = II then
+                if II < AGGREGATE_ARRAY'LAST
+		and then AGGREGATE_ARRAY(II+1).FIRST = II then
+		    -- (first but not only choice in named)
+		    AGGREGATE_ARRAY(II).ASSOC
+			    := MAKE_NAMED
+				( AS_EXP => D(AS_EXP, AGGREGATE_ARRAY(II).ASSOC)
+				, LX_SRCPOS => D(LX_SRCPOS
+				    , AGGREGATE_ARRAY(II).ASSOC )
+				, AS_CHOICE_S => MAKE_CHOICE_S
+				    ( LIST => SINGLETON
+					( AGGREGATE_ARRAY(II).CHOICE )
+				    , LX_SRCPOS => D(LX_SRCPOS
+					, AGGREGATE_ARRAY(II).CHOICE ) ));
+		elsif KIND(AGGREGATE_ARRAY(II).CHOICE) = DN_CHOICE_RANGE
+		and then KIND(D(AS_DISCRETE_RANGE,AGGREGATE_ARRAY(II).CHOICE))
+			= DN_DISCRETE_SUBTYPE
+		then
+		    -- (may change from discrete subtype to range)
+		    AGGREGATE_ARRAY(II).ASSOC
+			    := COPY_NODE (AGGREGATE_ARRAY(II).ASSOC );
+		end if;
+	    else
+		-- (not first choice for named)
+		AGGREGATE_ARRAY(II).ASSOC
+			:= MAKE_NAMED
+			    ( AS_EXP => D(AS_EXP
+				, AGGREGATE_ARRAY(AGGREGATE_ARRAY(II).FIRST)
+				    .ASSOC )
+			    , LX_SRCPOS => D(LX_SRCPOS
+				, AGGREGATE_ARRAY(II).CHOICE )
+			    , AS_CHOICE_S => MAKE_CHOICE_S
+				( LIST => SINGLETON
+				    ( AGGREGATE_ARRAY(II).CHOICE )
+				, LX_SRCPOS => D(LX_SRCPOS
+				    , AGGREGATE_ARRAY(II).CHOICE ) ));
+	    end if;
+
+	    -- reuse exp as value of static choice
+	    -- compute first static value for choice
+	    CHOICE := AGGREGATE_ARRAY(II).CHOICE;
+	    if KIND(CHOICE) = DN_CHOICE_EXP then
+                -- (it's a choice_exp)
+		AGGREGATE_ARRAY(II).EXP := GET_STATIC_VALUE
+			( D(AS_EXP, CHOICE) );
+	    elsif KIND(CHOICE) = DN_CHOICE_RANGE then
+                -- (it's a choice_range)
+		AGGREGATE_ARRAY(II).EXP := CONST_VOID;
+		RANGE_NODE := D(AS_DISCRETE_RANGE, CHOICE);
+		if KIND(RANGE_NODE) = DN_DISCRETE_SUBTYPE then
+		    -- (range given as discrete subtype -- find range)
+		    RANGE_NODE := D(AS_SUBTYPE_INDICATION, RANGE_NODE);
+		    if D(AS_CONSTRAINT, RANGE_NODE) /= CONST_VOID then
+			RANGE_NODE := D(AS_CONSTRAINT, RANGE_NODE);
+		    else
+			RANGE_NODE := D(AS_NAME, RANGE_NODE);
+			if KIND(RANGE_NODE) = DN_SELECTED then
+			    RANGE_NODE := D(AS_DESIGNATOR, RANGE_NODE);
+			end if;
+			RANGE_NODE := D(SM_DEFN, RANGE_NODE);
+			if KIND(RANGE_NODE) in CLASS_TYPE_NAME then
+			    RANGE_NODE := D(SM_TYPE_SPEC, RANGE_NODE);
+			end if;
+			if KIND(RANGE_NODE) in CLASS_SCALAR then
+			    RANGE_NODE := D(SM_RANGE, RANGE_NODE);
+			end if;
+		    end if;
+		    if KIND(RANGE_NODE) = DN_RANGE
+		    and then GET_STATIC_VALUE(D(AS_EXP1, RANGE_NODE))
+				/= CONST_VOID
+		    and then GET_STATIC_VALUE(D(AS_EXP2, RANGE_NODE))
+				/= CONST_VOID
+		    then
+			-- (discrete subtype has static range)
+			-- replace with range
+			CHOICE := COPY_NODE(CHOICE);
+			D(AS_CHOICE_S
+				, AGGREGATE_ARRAY(II).ASSOC
+				, MAKE_CHOICE_S (SINGLETON(CHOICE)) );
+			D(AS_DISCRETE_RANGE, CHOICE, RANGE_NODE);
+		    end if;
+		end if;
+		-- get static value for first element of range
+		if KIND(RANGE_NODE) = DN_RANGE then
+		    AGGREGATE_ARRAY(II).EXP
+			    := GET_STATIC_VALUE(D(AS_EXP1, RANGE_NODE));
+		else
+		    AGGREGATE_ARRAY(II).EXP := CONST_VOID;
+		end if;
+	    elsif KIND(CHOICE) = DN_CHOICE_OTHERS then
+		AGGREGATE_ARRAY(II).EXP := CONST_VOID;
+	    else
+		-- (not choice_anything; error must have been reported)
+		return;
+	    end if;
+
+	    -- check for illegal non-static
+	    if AGGREGATE_ARRAY(II).EXP = CONST_VOID
+	    and KIND(CHOICE) /= DN_CHOICE_OTHERS
+            and AGGREGATE_ARRAY'LENGTH > 1 then
+		NON_STATIC_SEEN := TRUE;
+                ERROR( D(LX_SRCPOS,CHOICE), "Choice must be static" );
+	    end if;
+
+	end loop;
+
+	if NON_STATIC_SEEN then
+	    return;
+	end if;
+
+	-- sort the entries
+        for II in AGGREGATE_ARRAY'FIRST + 1 .. AGGREGATE_ARRAY'LAST loop
+	    exit
+		when AGGREGATE_ARRAY(II).EXP = CONST_VOID; -- others
+            for JJ in reverse AGGREGATE_ARRAY'FIRST .. II - 1 loop
+		exit
+                    when UARITH."<="
+			    ( AGGREGATE_ARRAY(JJ).EXP
+			    , AGGREGATE_ARRAY(JJ + 1).EXP );
+		AGGREGATE_ITEM := AGGREGATE_ARRAY (JJ);
+		AGGREGATE_ARRAY (JJ) := AGGREGATE_ARRAY (JJ + 1);
+		AGGREGATE_ARRAY (JJ + 1) := AGGREGATE_ITEM;
+	    end loop;
+	end loop;
+
+	-- construct the new list
+        for II in AGGREGATE_ARRAY'RANGE loop
+	    NEW_NORMALIZED_LIST := APPEND
+			( NEW_NORMALIZED_LIST
+			, AGGREGATE_ARRAY(II).ASSOC );
+	end loop;
+
+	NORMALIZED_LIST := NEW_NORMALIZED_LIST;
+    end MAKE_NORMALIZED_LIST;
+
+end AGGRESO;

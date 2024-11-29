@@ -1,0 +1,17 @@
+with USERPK; use USERPK;
+with SETUTIL; use SETUTIL;
+
+package EXPRESO is
+
+    function GET_NAME_DEFN(NAME: TREE) return TREE;
+    function GET_STATIC_VALUE(EXP: TREE) return TREE;
+    function RESOLVE_EXP(EXP: TREE; TYPE_SPEC: TREE) return TREE;
+    function RESOLVE_DISCRETE_RANGE(EXP: TREE; TYPE_SPEC: TREE) return TREE;
+    function RESOLVE_TYPE_MARK(EXP: TREE) return TREE;
+    procedure RESOLVE_SUBTYPE_INDICATION
+		( EXP: in out TREE; SUBTYPE_SPEC: out TREE);
+
+    function RESOLVE_EXP(EXP: TREE; TYPESET: TYPESET_TYPE) return TREE;
+    function RESOLVE_NAME(NAME: TREE; DEFN: TREE) return TREE;
+    function WALK_ERRONEOUS_EXP(EXP: TREE) return TREE;
+end EXPRESO;

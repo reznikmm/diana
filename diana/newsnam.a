@@ -1,0 +1,390 @@
+with TEXT2_IO; use TEXT2_IO; -- for debug
+with VISUTIL; use VISUTIL; -- for debug (node_rep)
+with DIANA, DIANATTR, DIANAMAN; use DIANA, DIANATTR, DIANAMAN;
+with DEFUTIL; use DEFUTIL;
+with NODWALK; use NODWALK;
+
+package body NEWSNAM is
+
+    procedure REPLACE_SOURCE_NAME
+		( SOURCE_NAME:	in out TREE
+		; NODE_HASH:	in out NODE_HASH_TYPE
+		; H_IN: 	H_TYPE
+		; DECL: 	TREE := CONST_VOID )
+    is
+	-- makes a new source name for a declaration created by instantiation
+	-- ... must be careful to substitute for constitutents in the
+	-- ... proper order so that declarations are processed before used
+	-- ... (Eventually, this procedure could be extended to substitute
+	-- ... for generic bodies )
+
+	OLD_NAME:	constant TREE := SOURCE_NAME;
+	DEF:		TREE := CONST_VOID;
+	H:		H_TYPE := H_IN;
+	S:		S_TYPE;
+    begin
+        PUT("... replacing ");PUT(PRINTNAME(D(LX_SYMREP,SOURCE_NAME)));
+        PUT(" ");PUT_LINE(NODE_REP(SOURCE_NAME));
+
+	-- make sure identifier is in symbol table, even if name does not occur
+	-- ... in the current compilation
+	if KIND(D(LX_SYMREP, SOURCE_NAME)) = DN_TXTREP then
+	    D(LX_SYMREP
+		    , SOURCE_NAME
+		    , STORESYM(PRINTNAME(D(LX_SYMREP,SOURCE_NAME))) );
+	end if;
+
+	-- create a new name
+	REPLACE_NODE(SOURCE_NAME, NODE_HASH);
+
+        case CLASS_SOURCE_NAME'(KIND(SOURCE_NAME)) is
+
+	-- for a variable id
+	when DN_VARIABLE_ID =>
+	    declare
+		TYPE_DEF:	TREE;
+		TYPE_SPEC:	TREE;
+	    begin
+
+		-- make a def for it
+		DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		MAKE_DEF_VISIBLE(DEF);
+
+		-- if this variable is declared by a task declaration
+		if KIND(DECL) = DN_TASK_DECL then
+
+		    -- in the task region, make new type and substitute
+		    ENTER_REGION(DEF, H, S);
+		    TYPE_SPEC := D(SM_OBJ_TYPE, SOURCE_NAME);
+		    REPLACE_NODE(TYPE_SPEC, NODE_HASH);
+		    SUBSTITUTE_ATTRIBUTES(TYPE_SPEC, NODE_HASH, H);
+		    LEAVE_REGION(DEF, S);
+		    H := H_IN;
+
+		-- else if declaration includes a constrained array definition
+		elsif KIND(DECL) /= DN_RENAMES_OBJ_DECL
+                and then KIND(D(AS_TYPE_DEF,DECL)) = DN_CONSTRAINED_ARRAY_DEF then
+
+		    -- make a new base type
+		    TYPE_SPEC
+			    := GET_BASE_TYPE(D(SM_OBJ_TYPE, SOURCE_NAME));
+		    REPLACE_NODE(TYPE_SPEC, NODE_HASH);
+		    SUBSTITUTE_ATTRIBUTES(TYPE_SPEC, NODE_HASH, H);
+		end if;
+	    end;
+
+
+	-- for a constant id
+	when DN_CONSTANT_ID =>
+	    declare
+		FIRST_NAME:	TREE := SOURCE_NAME;
+		TYPE_DEF:	TREE;
+		TYPE_SPEC:	TREE;
+		INIT_EXP:	TREE;
+	    begin
+
+		-- if this is the defining occurrence
+		FIRST_NAME := D(SM_FIRST, OLD_NAME);
+		if FIRST_NAME = OLD_NAME then
+		    FIRST_NAME := SOURCE_NAME;
+
+		    -- make a def for it
+		    DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		    MAKE_DEF_VISIBLE(DEF);
+
+		    -- if this is a deferred constant declaration
+		    if KIND(DECL) = DN_DEFERRED_CONSTANT_DECL then
+
+			-- clear the initial expression
+			D(SM_INIT_EXP, SOURCE_NAME, CONST_VOID);
+
+		    -- else if declaration includes a constrained array def
+		    elsif KIND(D(AS_TYPE_DEF,DECL)) = DN_CONSTRAINED_ARRAY_DEF
+		    then
+
+			-- make a new base type
+			TYPE_SPEC
+				:= GET_BASE_TYPE(D(SM_TYPE_SPEC, SOURCE_NAME));
+			REPLACE_NODE(TYPE_SPEC, NODE_HASH);
+			SUBSTITUTE_ATTRIBUTES(TYPE_SPEC, NODE_HASH, H);
+
+		    end if;
+
+		-- else -- since this is not the defining occurrence
+		else
+		    SUBSTITUTE(FIRST_NAME, NODE_HASH, H);
+
+		    -- fix up forward reference in the deferred constant
+		    INIT_EXP := D(SM_INIT_EXP, SOURCE_NAME);
+		    SUBSTITUTE(INIT_EXP, NODE_HASH, H);
+		    D(SM_INIT_EXP, FIRST_NAME, INIT_EXP);
+		end if;
+	    end;
+
+
+	-- for a discriminant id
+	when DN_DISCRIMINANT_ID =>
+	    declare
+		FIRST_NAME:	TREE := D(SM_FIRST, OLD_NAME);
+	    begin
+
+		-- if this is the defining occurrence
+		if FIRST_NAME = OLD_NAME then
+
+		    -- make a def for it
+		    DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		    MAKE_DEF_VISIBLE(DEF);
+		end if;
+	    end;
+
+
+	-- for an enumeration literal
+	when CLASS_ENUM_LITERAL =>
+	    declare
+		HEADER: TREE := CONST_VOID;
+		DEFLIST: SEQ_TYPE := LIST(D(LX_SYMREP,SOURCE_NAME));
+		DEF: TREE;
+	    begin
+
+		-- if name is used
+		while not IS_EMPTY(DEFLIST) loop
+		    POP(DEFLIST, DEF);
+		    if D(XD_SOURCE_NAME, DEF) = OLD_NAME then
+			HEADER := D(XD_HEADER, DEF);
+			exit;
+		    end if;
+		end loop;
+		if HEADER /= CONST_VOID then
+
+		    -- get and substitute in the old header
+		    HEADER := D(XD_HEADER,GET_DEF_FOR_ID(OLD_NAME));
+		    SUBSTITUTE(HEADER, NODE_HASH, H);
+
+		    -- make a def for the new source name
+		    DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		    MAKE_DEF_VISIBLE(DEF, HEADER);
+		end if;
+	    end;
+
+
+	-- for a type id
+	when DN_TYPE_ID =>
+	    declare
+		FIRST_NAME:	TREE := SOURCE_NAME;
+		TYPE_SPEC:	TREE;
+	    begin
+
+		-- get the original type_spec and defining occurrence
+		TYPE_SPEC := D(SM_TYPE_SPEC, OLD_NAME);
+		FIRST_NAME := D(SM_FIRST, OLD_NAME);
+
+		-- if this is the defining occurrence
+		if FIRST_NAME = OLD_NAME then
+		    FIRST_NAME := SOURCE_NAME;
+
+		    -- make a def for it
+		    DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		    MAKE_DEF_VISIBLE(DEF);
+
+		    -- clear any forward reference to full type spec
+		    if KIND(TYPE_SPEC) in CLASS_CONSTRAINED then
+			TYPE_SPEC := D(SM_BASE_TYPE, TYPE_SPEC);
+		    end if;
+		    if KIND(TYPE_SPEC) = DN_INCOMPLETE then
+			D(XD_FULL_TYPE_SPEC, TYPE_SPEC, CONST_VOID);
+		    else
+			TYPE_SPEC := GET_BASE_TYPE(TYPE_SPEC);
+		    end if;
+
+		-- else -- since this is not the defining occurrence
+		else
+		    SUBSTITUTE(FIRST_NAME, NODE_HASH, H);
+
+		    -- get the existing def
+		    DEF := GET_DEF_FOR_ID(FIRST_NAME);
+		end if;
+
+		-- get and replace the type_spec node for the base type
+		TYPE_SPEC := GET_BASE_TYPE(TYPE_SPEC);
+		REPLACE_NODE(TYPE_SPEC, NODE_HASH);
+
+		-- if this type is (possibly) a declarative region
+		if KIND(TYPE_SPEC) = DN_RECORD
+		or KIND(TYPE_SPEC) = DN_TASK_SPEC then -- wbe 7/31/90
+
+		    -- enter region and substitute within the type spec
+		    ENTER_REGION(DEF, H, S);
+		    SUBSTITUTE_ATTRIBUTES(TYPE_SPEC, NODE_HASH, H);
+		    LEAVE_REGION(DEF, S);
+		    H := REPLACE_SOURCE_NAME.H_IN;
+
+		-- else -- since this type cannot be a declarative region
+		else
+
+		    -- if it is an enumeration type
+		    if KIND(TYPE_SPEC) = DN_ENUMERATION then
+
+			-- make new enumeration literals
+			declare
+			    LITERAL_LIST: SEQ_TYPE
+				    := LIST(D(SM_LITERAL_S,TYPE_SPEC));
+			    LITERAL: TREE;
+			begin
+			    while not IS_EMPTY(LITERAL_LIST) loop
+				POP(LITERAL_LIST, LITERAL);
+				REPLACE_SOURCE_NAME
+					( LITERAL
+					, NODE_HASH
+					, H );
+			    end loop;
+			end;
+		    end if;
+
+		    -- substitute within the type spec
+		    SUBSTITUTE_ATTRIBUTES(TYPE_SPEC, NODE_HASH, H);
+		end if;
+
+		-- if this was not a defining occurrence
+		if FIRST_NAME /= SOURCE_NAME then
+
+		    -- get and substitute in the full subtype
+		    TYPE_SPEC := D(SM_TYPE_SPEC, SOURCE_NAME);
+		    SUBSTITUTE(TYPE_SPEC, NODE_HASH, H);
+
+		    -- fix up forward references in defining occurrence
+		    if KIND(FIRST_NAME) = DN_TYPE_ID then
+			D(XD_FULL_TYPE_SPEC
+				, D(SM_TYPE_SPEC, FIRST_NAME)
+				, TYPE_SPEC );
+		    else
+			D(SM_TYPE_SPEC
+				, D(SM_TYPE_SPEC, FIRST_NAME)
+				, TYPE_SPEC );
+		    end if;
+		end if;
+	    end;
+
+
+	-- for an [l_]private_type id
+	when DN_PRIVATE_TYPE_ID | DN_L_PRIVATE_TYPE_ID =>
+	    declare
+		TYPE_SPEC:	TREE;
+	    begin
+
+		-- make a def for it
+		DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		MAKE_DEF_VISIBLE(DEF);
+
+		-- replace the type_spec node for the base type
+		TYPE_SPEC := D(SM_TYPE_SPEC, SOURCE_NAME);
+		REPLACE_NODE(TYPE_SPEC, NODE_HASH);
+
+		-- clear forward reference to full type spec
+		D(SM_TYPE_SPEC, TYPE_SPEC, CONST_VOID);
+
+		-- enter region and substitute within the type spec
+		ENTER_REGION(DEF, H, S);
+		SUBSTITUTE_ATTRIBUTES(TYPE_SPEC, NODE_HASH, H);
+		LEAVE_REGION(DEF, S);
+		H := REPLACE_SOURCE_NAME.H_IN;
+	    end;
+
+
+	-- for a unit or entry name
+	when CLASS_NON_TASK_NAME | DN_ENTRY_ID =>
+	    declare
+		HEADER: TREE := D(SM_SPEC, SOURCE_NAME);
+		UNIT_DESC: TREE := CONST_VOID;
+		DECL_S: TREE;
+		NOT_EQUAL: TREE;
+	    begin
+
+		-- get the unit_desc from the declaration
+                -- ... (decl void for "/=" or derived function)
+		if DECL /= CONST_VOID
+		and then KIND(SOURCE_NAME) in CLASS_SUBPROG_PACK_NAME then
+		    UNIT_DESC := D(SM_UNIT_DESC, SOURCE_NAME);
+		end if;
+
+		-- make def and enter region
+		DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		ENTER_REGION(DEF, H, S);
+		H.IS_IN_SPEC := FALSE;
+
+		-- if this is an instantiation
+		if KIND(UNIT_DESC) = DN_INSTANTIATION then
+
+		    -- substitute for the declarations of the generic actuals
+		    DECL_S := D(SM_DECL_S, UNIT_DESC);
+		    SUBSTITUTE(DECL_S, NODE_HASH, H);
+
+		-- else if this is a generic declaration
+		elsif KIND(SOURCE_NAME) = DN_GENERIC_ID then
+
+		    -- clear the forward reference
+		    D(SM_BODY, SOURCE_NAME, CONST_VOID);
+
+		    -- substitute for the generic parameter list
+		    DECL_S := D(SM_GENERIC_PARAM_S, SOURCE_NAME);
+		    SUBSTITUTE(DECL_S, NODE_HASH, H);
+		end if;
+
+		-- substitute for the header
+		if KIND(HEADER) = DN_PACKAGE_SPEC then
+		    DECL_S := D(AS_DECL_S1, HEADER);
+		    H.IS_IN_SPEC := TRUE;
+		    SUBSTITUTE(DECL_S, NODE_HASH, H);
+		    H.IS_IN_SPEC := FALSE;
+		elsif KIND(HEADER) = DN_TASK_SPEC then
+		    H.IS_IN_SPEC := TRUE;
+		end if;
+		SUBSTITUTE(HEADER, NODE_HASH, H);
+
+		-- make the def visible
+		if KIND(SOURCE_NAME) in CLASS_SUBPROG_NAME then
+		    MAKE_DEF_VISIBLE(DEF, HEADER);
+		else
+		    MAKE_DEF_VISIBLE(DEF);
+		end if;
+
+		-- leave region
+		LEAVE_REGION(DEF, S);
+		H := REPLACE_SOURCE_NAME.H_IN;
+
+                -- if this is an operator_id for "="
+		if KIND(SOURCE_NAME) = DN_OPERATOR_ID
+		and then D(XD_NOT_EQUAL, SOURCE_NAME) /= CONST_VOID then
+
+		    -- replace the inequality operator too
+		    NOT_EQUAL := D(XD_NOT_EQUAL, SOURCE_NAME);
+		    REPLACE_SOURCE_NAME(NOT_EQUAL, NODE_HASH, H, CONST_VOID);
+		    D(XD_NOT_EQUAL, SOURCE_NAME, NOT_EQUAL);
+		end if;
+	    end;
+
+
+        -- for id's with no special structure
+	when DN_NUMBER_ID | DN_COMPONENT_ID | CLASS_PARAM_NAME
+		| DN_SUBTYPE_ID | DN_EXCEPTION_ID =>
+
+	    -- make a def if name is used
+	    if KIND(D(LX_SYMREP, SOURCE_NAME)) = DN_SYMBOL_REP then
+		DEF := MAKE_DEF_FOR_ID(SOURCE_NAME, H);
+		MAKE_DEF_VISIBLE(DEF);
+	    end if;
+
+
+        -- for id's which should not occur
+	when DN_ITERATION_ID | DN_TASK_BODY_ID | CLASS_LABEL_NAME =>
+
+	    -- abort the compilation
+            QUIT("Invalid id for generic substitution");
+
+	end case;
+
+
+	-- substitute for the attributes of the id
+	SUBSTITUTE_ATTRIBUTES(SOURCE_NAME, NODE_HASH, H);
+
+    end REPLACE_SOURCE_NAME;
+end NEWSNAM;

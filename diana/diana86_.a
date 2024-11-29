@@ -1,0 +1,1519 @@
+-- This file contains specification and body of DIANA86
+
+with USERPK; use USERPK;
+--following with clause to make compile order tools work
+with DIANAMAN, REPNODE;
+package DIANA86 is
+
+  type NODE_NAME is
+	( DN_ROOT
+	, DN_TXTREP
+	, DN_NUM_VAL
+	, DN_FALSE
+	, DN_TRUE
+	, DN_NIL
+	, DN_LIST
+	, DN_SOURCELINE
+	, DN_ERROR
+	, DN_SYMBOL_REP
+	, DN_HASH
+	, DN_VOID
+	, DN_VARIABLE_ID
+	, DN_CONSTANT_ID
+	, DN_NUMBER_ID
+	, DN_COMPONENT_ID
+	, DN_DISCRIMINANT_ID
+	, DN_IN_ID
+	, DN_IN_OUT_ID
+	, DN_OUT_ID
+	, DN_ENUMERATION_ID
+	, DN_CHARACTER_ID
+	, DN_ITERATION_ID
+	, DN_TYPE_ID
+	, DN_SUBTYPE_ID
+	, DN_PRIVATE_TYPE_ID
+	, DN_L_PRIVATE_TYPE_ID
+	, DN_PROCEDURE_ID
+	, DN_FUNCTION_ID
+	, DN_OPERATOR_ID
+	, DN_PACKAGE_ID
+	, DN_GENERIC_ID
+	, DN_TASK_BODY_ID
+	, DN_LABEL_ID
+	, DN_BLOCK_LOOP_ID
+	, DN_ENTRY_ID
+	, DN_EXCEPTION_ID
+	, DN_ATTRIBUTE_ID
+	, DN_PRAGMA_ID
+	, DN_ARGUMENT_ID
+	, DN_BLTN_OPERATOR_ID
+	, DN_BLOCK_MASTER
+	, DN_DSCRMT_DECL
+	, DN_IN
+	, DN_OUT
+	, DN_IN_OUT
+	, DN_CONSTANT_DECL
+	, DN_VARIABLE_DECL
+	, DN_NUMBER_DECL
+	, DN_EXCEPTION_DECL
+	, DN_DEFERRED_CONSTANT_DECL
+	, DN_TYPE_DECL
+	, DN_SUBTYPE_DECL
+	, DN_TASK_DECL
+	, DN_GENERIC_DECL
+	, DN_SUBPROG_ENTRY_DECL
+	, DN_PACKAGE_DECL
+	, DN_RENAMES_OBJ_DECL
+	, DN_RENAMES_EXC_DECL
+	, DN_NULL_COMP_DECL
+	, DN_LENGTH_ENUM_REP
+	, DN_ADDRESS
+	, DN_RECORD_REP
+	, DN_USE
+	, DN_PRAGMA
+	, DN_SUBPROGRAM_BODY
+	, DN_PACKAGE_BODY
+	, DN_TASK_BODY
+	, DN_SUBUNIT
+	, DN_ENUMERATION_DEF
+	, DN_SUBTYPE_INDICATION
+	, DN_INTEGER_DEF
+	, DN_FLOAT_DEF
+	, DN_FIXED_DEF
+	, DN_CONSTRAINED_ARRAY_DEF
+	, DN_UNCONSTRAINED_ARRAY_DEF
+	, DN_ACCESS_DEF
+	, DN_DERIVED_DEF
+	, DN_RECORD_DEF
+	, DN_PRIVATE_DEF
+	, DN_L_PRIVATE_DEF
+	, DN_FORMAL_DSCRT_DEF
+	, DN_FORMAL_INTEGER_DEF
+	, DN_FORMAL_FIXED_DEF
+	, DN_FORMAL_FLOAT_DEF
+	, DN_ALTERNATIVE_S
+	, DN_ARGUMENT_ID_S
+	, DN_CHOICE_S
+	, DN_COMP_REP_S
+	, DN_COMPLTN_UNIT_S
+	, DN_CONTEXT_ELEM_S
+	, DN_DECL_S
+	, DN_DSCRMT_DECL_S
+	, DN_GENERAL_ASSOC_S
+	, DN_DISCRETE_RANGE_S
+	, DN_ENUM_LITERAL_S
+	, DN_EXP_S
+	, DN_ITEM_S
+	, DN_INDEX_S
+	, DN_NAME_S
+	, DN_PARAM_S
+	, DN_PRAGMA_S
+	, DN_SCALAR_S
+	, DN_SOURCE_NAME_S
+	, DN_STM_S
+	, DN_TEST_CLAUSE_ELEM_S
+	, DN_USE_PRAGMA_S
+	, DN_VARIANT_S
+	, DN_LABELED
+	, DN_NULL_STM
+	, DN_ABORT
+	, DN_RETURN
+	, DN_DELAY
+	, DN_ASSIGN
+	, DN_EXIT
+	, DN_CODE
+	, DN_CASE
+	, DN_GOTO
+	, DN_RAISE
+	, DN_ENTRY_CALL
+	, DN_PROCEDURE_CALL
+	, DN_ACCEPT
+	, DN_LOOP
+	, DN_BLOCK
+	, DN_COND_ENTRY
+	, DN_TIMED_ENTRY
+	, DN_IF
+	, DN_SELECTIVE_WAIT
+	, DN_TERMINATE
+	, DN_STM_PRAGMA
+	, DN_NAMED
+	, DN_ASSOC
+	, DN_USED_CHAR
+	, DN_USED_OBJECT_ID
+	, DN_USED_OP
+	, DN_USED_NAME_ID
+	, DN_ATTRIBUTE
+	, DN_SELECTED
+	, DN_FUNCTION_CALL
+	, DN_INDEXED
+	, DN_SLICE
+	, DN_ALL
+	, DN_SHORT_CIRCUIT
+	, DN_NUMERIC_LITERAL
+	, DN_NULL_ACCESS
+	, DN_RANGE_MEMBERSHIP
+	, DN_TYPE_MEMBERSHIP
+	, DN_CONVERSION
+	, DN_QUALIFIED
+	, DN_PARENTHESIZED
+	, DN_AGGREGATE
+	, DN_STRING_LITERAL
+	, DN_QUALIFIED_ALLOCATOR
+	, DN_SUBTYPE_ALLOCATOR
+	, DN_RANGE
+	, DN_RANGE_ATTRIBUTE
+	, DN_DISCRETE_SUBTYPE
+	, DN_FLOAT_CONSTRAINT
+	, DN_FIXED_CONSTRAINT
+	, DN_INDEX_CONSTRAINT
+	, DN_DSCRMT_CONSTRAINT
+	, DN_CHOICE_EXP
+	, DN_CHOICE_RANGE
+	, DN_CHOICE_OTHERS
+	, DN_PROCEDURE_SPEC
+	, DN_FUNCTION_SPEC
+	, DN_ENTRY
+	, DN_PACKAGE_SPEC
+	, DN_RENAMES_UNIT
+	, DN_INSTANTIATION
+	, DN_NAME_DEFAULT
+	, DN_BOX_DEFAULT
+	, DN_NO_DEFAULT
+	, DN_BLOCK_BODY
+	, DN_STUB
+	, DN_IMPLICIT_NOT_EQ
+	, DN_DERIVED_SUBPROG
+	, DN_COND_CLAUSE
+	, DN_SELECT_ALTERNATIVE
+	, DN_SELECT_ALT_PRAGMA
+	, DN_IN_OP
+	, DN_NOT_IN
+	, DN_AND_THEN
+	, DN_OR_ELSE
+	, DN_FOR
+	, DN_REVERSE
+	, DN_WHILE
+	, DN_ALTERNATIVE
+	, DN_ALTERNATIVE_PRAGMA
+	, DN_COMP_REP
+	, DN_COMP_REP_PRAGMA
+	, DN_CONTEXT_PRAGMA
+	, DN_WITH
+	, DN_VARIANT
+	, DN_VARIANT_PRAGMA
+	, DN_ALIGNMENT
+	, DN_VARIANT_PART
+	, DN_COMP_LIST
+	, DN_COMPILATION
+	, DN_COMPILATION_UNIT
+	, DN_INDEX
+	, DN_TASK_SPEC
+	, DN_ENUMERATION
+	, DN_INTEGER
+	, DN_FLOAT
+	, DN_FIXED
+	, DN_ARRAY
+	, DN_RECORD
+	, DN_ACCESS
+	, DN_CONSTRAINED_ARRAY
+	, DN_CONSTRAINED_RECORD
+	, DN_CONSTRAINED_ACCESS
+	, DN_PRIVATE
+	, DN_L_PRIVATE
+	, DN_INCOMPLETE
+	, DN_UNIVERSAL_INTEGER
+	, DN_UNIVERSAL_FIXED
+	, DN_UNIVERSAL_REAL
+	, DN_USER_ROOT
+	, DN_REAL_VAL
+	, DN_TRANS_WITH
+	, DN_LIB_INFO
+	, DN_DEF
+	, DN_ANY_ACCESS
+	, DN_ANY_COMPOSITE
+	, DN_ANY_STRING
+	, DN_ANY_ACCESS_OF
+	, DN_ANY_INTEGER
+	, DN_ANY_REAL
+	, DN_IMPLICIT_CONV
+	, DN_NULLARY_CALL
+    );
+
+  subtype Class_STANDARD_IDL is NODE_NAME range DN_ROOT .. DN_VOID;
+  subtype Class_BOOLEAN is NODE_NAME range DN_FALSE .. DN_TRUE;
+  subtype Class_ALL_SOURCE is NODE_NAME range DN_VARIABLE_ID .. DN_INDEX;
+  subtype Class_DEF_NAME is NODE_NAME
+	range DN_VARIABLE_ID .. DN_BLTN_OPERATOR_ID;
+  subtype Class_SOURCE_NAME is NODE_NAME
+	range DN_VARIABLE_ID .. DN_EXCEPTION_ID;
+  subtype Class_OBJECT_NAME is NODE_NAME
+	range DN_VARIABLE_ID .. DN_ITERATION_ID;
+  subtype Class_INIT_OBJECT_NAME is NODE_NAME
+	range DN_VARIABLE_ID .. DN_OUT_ID;
+  subtype Class_VC_NAME is NODE_NAME range DN_VARIABLE_ID .. DN_CONSTANT_ID;
+  subtype Class_COMP_NAME is NODE_NAME
+	range DN_COMPONENT_ID .. DN_DISCRIMINANT_ID;
+  subtype Class_PARAM_NAME is NODE_NAME range DN_IN_ID .. DN_OUT_ID;
+  subtype Class_ENUM_LITERAL is NODE_NAME
+	range DN_ENUMERATION_ID .. DN_CHARACTER_ID;
+  subtype Class_TYPE_NAME is NODE_NAME
+	range DN_TYPE_ID .. DN_L_PRIVATE_TYPE_ID;
+  subtype Class_UNIT_NAME is NODE_NAME
+	range DN_PROCEDURE_ID .. DN_TASK_BODY_ID;
+  subtype Class_NON_TASK_NAME is NODE_NAME
+	range DN_PROCEDURE_ID .. DN_GENERIC_ID;
+  subtype Class_SUBPROG_PACK_NAME is NODE_NAME
+	range DN_PROCEDURE_ID .. DN_PACKAGE_ID;
+  subtype Class_SUBPROG_NAME is NODE_NAME
+	range DN_PROCEDURE_ID .. DN_OPERATOR_ID;
+  subtype Class_LABEL_NAME is NODE_NAME range DN_LABEL_ID .. DN_BLOCK_LOOP_ID;
+  subtype Class_PREDEF_NAME is NODE_NAME
+	range DN_ATTRIBUTE_ID .. DN_BLTN_OPERATOR_ID;
+  subtype Class_ALL_DECL is NODE_NAME range DN_BLOCK_MASTER .. DN_SUBUNIT;
+  subtype Class_ITEM is NODE_NAME range DN_DSCRMT_DECL .. DN_TASK_BODY;
+  subtype Class_DSCRMT_PARAM_DECL is NODE_NAME
+	range DN_DSCRMT_DECL .. DN_IN_OUT;
+  subtype Class_PARAM is NODE_NAME range DN_IN .. DN_IN_OUT;
+  subtype Class_DECL is NODE_NAME range DN_CONSTANT_DECL .. DN_PRAGMA;
+  subtype Class_ID_S_DECL is NODE_NAME
+	range DN_CONSTANT_DECL .. DN_DEFERRED_CONSTANT_DECL;
+  subtype Class_EXP_DECL is NODE_NAME
+	range DN_CONSTANT_DECL .. DN_NUMBER_DECL;
+  subtype Class_OBJECT_DECL is NODE_NAME
+	range DN_CONSTANT_DECL .. DN_VARIABLE_DECL;
+  subtype Class_ID_DECL is NODE_NAME
+	range DN_TYPE_DECL .. DN_RENAMES_EXC_DECL;
+  subtype Class_UNIT_DECL is NODE_NAME
+	range DN_GENERIC_DECL .. DN_PACKAGE_DECL;
+  subtype Class_NON_GENERIC_DECL is NODE_NAME
+	range DN_SUBPROG_ENTRY_DECL .. DN_PACKAGE_DECL;
+  subtype Class_SIMPLE_RENAME_DECL is NODE_NAME
+	range DN_RENAMES_OBJ_DECL .. DN_RENAMES_EXC_DECL;
+  subtype Class_REP is NODE_NAME range DN_LENGTH_ENUM_REP .. DN_RECORD_REP;
+  subtype Class_NAMED_REP is NODE_NAME range DN_LENGTH_ENUM_REP .. DN_ADDRESS;
+  subtype Class_USE_PRAGMA is NODE_NAME range DN_USE .. DN_PRAGMA;
+  subtype Class_SUBUNIT_BODY is NODE_NAME
+	range DN_SUBPROGRAM_BODY .. DN_TASK_BODY;
+  subtype Class_TYPE_DEF is NODE_NAME
+	range DN_ENUMERATION_DEF .. DN_FORMAL_FLOAT_DEF;
+  subtype Class_CONSTRAINED_DEF is NODE_NAME
+	range DN_SUBTYPE_INDICATION .. DN_FIXED_DEF;
+  subtype Class_ARR_ACC_DER_DEF is NODE_NAME
+	range DN_CONSTRAINED_ARRAY_DEF .. DN_DERIVED_DEF;
+  subtype Class_SEQUENCES is NODE_NAME range DN_ALTERNATIVE_S .. DN_VARIANT_S;
+  subtype Class_STM_ELEM is NODE_NAME range DN_LABELED .. DN_STM_PRAGMA;
+  subtype Class_STM is NODE_NAME range DN_LABELED .. DN_TERMINATE;
+  subtype Class_STM_WITH_EXP is NODE_NAME range DN_RETURN .. DN_CASE;
+  subtype Class_STM_WITH_EXP_NAME is NODE_NAME range DN_ASSIGN .. DN_CODE;
+  subtype Class_STM_WITH_NAME is NODE_NAME range DN_GOTO .. DN_PROCEDURE_CALL;
+  subtype Class_CALL_STM is NODE_NAME
+	range DN_ENTRY_CALL .. DN_PROCEDURE_CALL;
+  subtype Class_BLOCK_LOOP is NODE_NAME range DN_LOOP .. DN_BLOCK;
+  subtype Class_ENTRY_STM is NODE_NAME range DN_COND_ENTRY .. DN_TIMED_ENTRY;
+  subtype Class_CLAUSES_STM is NODE_NAME range DN_IF .. DN_SELECTIVE_WAIT;
+  subtype Class_GENERAL_ASSOC is NODE_NAME
+	range DN_NAMED .. DN_SUBTYPE_ALLOCATOR;
+  subtype Class_NAMED_ASSOC is NODE_NAME range DN_NAMED .. DN_ASSOC;
+  subtype Class_EXP is NODE_NAME range DN_USED_CHAR .. DN_SUBTYPE_ALLOCATOR;
+  subtype Class_NAME is NODE_NAME range DN_USED_CHAR .. DN_ALL;
+  subtype Class_DESIGNATOR is NODE_NAME range DN_USED_CHAR .. DN_USED_NAME_ID;
+  subtype Class_USED_OBJECT is NODE_NAME
+	range DN_USED_CHAR .. DN_USED_OBJECT_ID;
+  subtype Class_USED_NAME is NODE_NAME range DN_USED_OP .. DN_USED_NAME_ID;
+  subtype Class_NAME_EXP is NODE_NAME range DN_ATTRIBUTE .. DN_ALL;
+  subtype Class_NAME_VAL is NODE_NAME range DN_ATTRIBUTE .. DN_FUNCTION_CALL;
+  subtype Class_EXP_EXP is NODE_NAME
+	range DN_SHORT_CIRCUIT .. DN_SUBTYPE_ALLOCATOR;
+  subtype Class_EXP_VAL is NODE_NAME
+	range DN_SHORT_CIRCUIT .. DN_PARENTHESIZED;
+  subtype Class_EXP_VAL_EXP is NODE_NAME
+	range DN_RANGE_MEMBERSHIP .. DN_PARENTHESIZED;
+  subtype Class_MEMBERSHIP is NODE_NAME
+	range DN_RANGE_MEMBERSHIP .. DN_TYPE_MEMBERSHIP;
+  subtype Class_QUAL_CONV is NODE_NAME range DN_CONVERSION .. DN_QUALIFIED;
+  subtype Class_AGG_EXP is NODE_NAME range DN_AGGREGATE .. DN_STRING_LITERAL;
+  subtype Class_CONSTRAINT is NODE_NAME
+	range DN_RANGE .. DN_DSCRMT_CONSTRAINT;
+  subtype Class_DISCRETE_RANGE is NODE_NAME
+	range DN_RANGE .. DN_DISCRETE_SUBTYPE;
+  subtype Class_RANGE is NODE_NAME range DN_RANGE .. DN_RANGE_ATTRIBUTE;
+  subtype Class_REAL_CONSTRAINT is NODE_NAME
+	range DN_FLOAT_CONSTRAINT .. DN_FIXED_CONSTRAINT;
+  subtype Class_CHOICE is NODE_NAME range DN_CHOICE_EXP .. DN_CHOICE_OTHERS;
+  subtype Class_HEADER is NODE_NAME
+	range DN_PROCEDURE_SPEC .. DN_PACKAGE_SPEC;
+  subtype Class_SUBP_ENTRY_HEADER is NODE_NAME
+	range DN_PROCEDURE_SPEC .. DN_ENTRY;
+  subtype Class_UNIT_DESC is NODE_NAME
+	range DN_RENAMES_UNIT .. DN_DERIVED_SUBPROG;
+  subtype Class_UNIT_KIND is NODE_NAME range DN_RENAMES_UNIT .. DN_NO_DEFAULT;
+  subtype Class_RENAME_INSTANT is NODE_NAME
+	range DN_RENAMES_UNIT .. DN_INSTANTIATION;
+  subtype Class_GENERIC_PARAM is NODE_NAME
+	range DN_NAME_DEFAULT .. DN_NO_DEFAULT;
+  subtype Class_BODY is NODE_NAME range DN_BLOCK_BODY .. DN_STUB;
+  subtype Class_TEST_CLAUSE_ELEM is NODE_NAME
+	range DN_COND_CLAUSE .. DN_SELECT_ALT_PRAGMA;
+  subtype Class_TEST_CLAUSE is NODE_NAME
+	range DN_COND_CLAUSE .. DN_SELECT_ALTERNATIVE;
+  subtype Class_MEMBERSHIP_OP is NODE_NAME range DN_IN_OP .. DN_NOT_IN;
+  subtype Class_SHORT_CIRCUIT_OP is NODE_NAME range DN_AND_THEN .. DN_OR_ELSE;
+  subtype Class_ITERATION is NODE_NAME range DN_FOR .. DN_WHILE;
+  subtype Class_FOR_REV is NODE_NAME range DN_FOR .. DN_REVERSE;
+  subtype Class_ALTERNATIVE_ELEM is NODE_NAME
+	range DN_ALTERNATIVE .. DN_ALTERNATIVE_PRAGMA;
+  subtype Class_COMP_REP_ELEM is NODE_NAME
+	range DN_COMP_REP .. DN_COMP_REP_PRAGMA;
+  subtype Class_CONTEXT_ELEM is NODE_NAME range DN_CONTEXT_PRAGMA .. DN_WITH;
+  subtype Class_VARIANT_ELEM is NODE_NAME
+	range DN_VARIANT .. DN_VARIANT_PRAGMA;
+  subtype Class_ALIGNMENT_CLAUSE is NODE_NAME
+	range DN_ALIGNMENT .. DN_ALIGNMENT;
+  subtype Class_VARIANT_PART is NODE_NAME
+	range DN_VARIANT_PART .. DN_VARIANT_PART;
+  subtype Class_TYPE_SPEC is NODE_NAME
+	range DN_TASK_SPEC .. DN_UNIVERSAL_REAL;
+  subtype Class_DERIVABLE_SPEC is NODE_NAME
+	range DN_TASK_SPEC .. DN_L_PRIVATE;
+  subtype Class_FULL_TYPE_SPEC is NODE_NAME
+	range DN_TASK_SPEC .. DN_CONSTRAINED_ACCESS;
+  subtype Class_NON_TASK is NODE_NAME
+	range DN_ENUMERATION .. DN_CONSTRAINED_ACCESS;
+  subtype Class_SCALAR is NODE_NAME range DN_ENUMERATION .. DN_FIXED;
+  subtype Class_REAL is NODE_NAME range DN_FLOAT .. DN_FIXED;
+  subtype Class_UNCONSTRAINED is NODE_NAME range DN_ARRAY .. DN_ACCESS;
+  subtype Class_UNCONSTRAINED_COMPOSITE is NODE_NAME
+	range DN_ARRAY .. DN_RECORD;
+  subtype Class_CONSTRAINED is NODE_NAME
+	range DN_CONSTRAINED_ARRAY .. DN_CONSTRAINED_ACCESS;
+  subtype Class_PRIVATE_SPEC is NODE_NAME range DN_PRIVATE .. DN_L_PRIVATE;
+  subtype Class_NON_DIANA is NODE_NAME range DN_USER_ROOT .. DN_NULLARY_CALL;
+  subtype Class_UNSPECIFIED_TYPE is NODE_NAME
+	range DN_ANY_ACCESS .. DN_ANY_REAL;
+
+
+    function XD_HIGH_PAGE (T: TREE) return TREE;
+    procedure XD_HIGH_PAGE (T: TREE; V: TREE);
+    function XD_USER_ROOT (T: TREE) return TREE;
+    procedure XD_USER_ROOT (T: TREE; V: TREE);
+    function XD_ERR_COUNT (T: TREE) return TREE;
+    procedure XD_ERR_COUNT (T: TREE; V: TREE);
+    function SPARE_1 (T: TREE) return TREE;
+    procedure SPARE_1 (T: TREE; V: TREE);
+    function XD_HEAD (T: TREE) return TREE;
+    procedure XD_HEAD (T: TREE; V: TREE);
+    function XD_TAIL (T: TREE) return TREE;
+    procedure XD_TAIL (T: TREE; V: TREE);
+    function XD_NUMBER (T: TREE) return TREE;
+    procedure XD_NUMBER (T: TREE; V: TREE);
+    function XD_SRCPOS (T: TREE) return TREE;
+    procedure XD_SRCPOS (T: TREE; V: TREE);
+    function XD_TEXT (T: TREE) return TREE;
+    procedure XD_TEXT (T: TREE; V: TREE);
+    function LX_SYMREP (T: TREE) return TREE;
+    procedure LX_SYMREP (T: TREE; V: TREE);
+    function XD_REGION (T: TREE) return TREE;
+    procedure XD_REGION (T: TREE; V: TREE);
+    function SM_OBJ_TYPE (T: TREE) return TREE;
+    procedure SM_OBJ_TYPE (T: TREE; V: TREE);
+    function SM_FIRST (T: TREE) return TREE;
+    procedure SM_FIRST (T: TREE; V: TREE);
+    function AS_USED_NAME_ID (T: TREE) return TREE;
+    procedure AS_USED_NAME_ID (T: TREE; V: TREE);
+    function AS_GENERAL_ASSOC_S (T: TREE) return TREE;
+    procedure AS_GENERAL_ASSOC_S (T: TREE; V: TREE);
+    function AS_SOURCE_NAME (T: TREE) return TREE;
+    procedure AS_SOURCE_NAME (T: TREE; V: TREE);
+    function AS_SOURCE_NAME_S (T: TREE) return TREE;
+    procedure AS_SOURCE_NAME_S (T: TREE; V: TREE);
+    function AS_EXP (T: TREE) return TREE;
+    procedure AS_EXP (T: TREE; V: TREE);
+    function AS_TYPE_DEF (T: TREE) return TREE;
+    procedure AS_TYPE_DEF (T: TREE; V: TREE);
+    function SM_INIT_EXP (T: TREE) return TREE;
+    procedure SM_INIT_EXP (T: TREE; V: TREE);
+    function SM_RENAMES_OBJ (T: TREE) return BOOLEAN;
+    procedure SM_RENAMES_OBJ (T: TREE; V: BOOLEAN);
+    function SM_ADDRESS (T: TREE) return TREE;
+    procedure SM_ADDRESS (T: TREE; V: TREE);
+    function SM_IS_SHARED (T: TREE) return BOOLEAN;
+    procedure SM_IS_SHARED (T: TREE; V: BOOLEAN);
+    function AS_DSCRMT_DECL_S (T: TREE) return TREE;
+    procedure AS_DSCRMT_DECL_S (T: TREE; V: TREE);
+    function SM_TYPE_SPEC (T: TREE) return TREE;
+    procedure SM_TYPE_SPEC (T: TREE; V: TREE);
+    function AS_SUBTYPE_INDICATION (T: TREE) return TREE;
+    procedure AS_SUBTYPE_INDICATION (T: TREE; V: TREE);
+    function XD_SOURCE_NAME (T: TREE) return TREE;
+    procedure XD_SOURCE_NAME (T: TREE; V: TREE);
+    function SM_DERIVED (T: TREE) return TREE;
+    procedure SM_DERIVED (T: TREE; V: TREE);
+    function SM_IS_ANONYMOUS (T: TREE) return BOOLEAN;
+    procedure SM_IS_ANONYMOUS (T: TREE; V: BOOLEAN);
+    function SM_BASE_TYPE (T: TREE) return TREE;
+    procedure SM_BASE_TYPE (T: TREE; V: TREE);
+    function SM_RANGE (T: TREE) return TREE;
+    procedure SM_RANGE (T: TREE; V: TREE);
+    function CD_IMPL_SIZE (T: TREE) return INTEGER;
+    procedure CD_IMPL_SIZE (T: TREE; V: INTEGER);
+    function SM_ACCURACY (T: TREE) return TREE;
+    procedure SM_ACCURACY (T: TREE; V: TREE);
+    function SM_SIZE (T: TREE) return TREE;
+    procedure SM_SIZE (T: TREE; V: TREE);
+    function SM_IS_LIMITED (T: TREE) return BOOLEAN;
+    procedure SM_IS_LIMITED (T: TREE; V: BOOLEAN);
+    function SM_IS_PACKED (T: TREE) return BOOLEAN;
+    procedure SM_IS_PACKED (T: TREE; V: BOOLEAN);
+    function SM_DEPENDS_ON_DSCRMT (T: TREE) return BOOLEAN;
+    procedure SM_DEPENDS_ON_DSCRMT (T: TREE; V: BOOLEAN);
+    function AS_CONSTRAINT (T: TREE) return TREE;
+    procedure AS_CONSTRAINT (T: TREE; V: TREE);
+    function AS_NAME (T: TREE) return TREE;
+    procedure AS_NAME (T: TREE; V: TREE);
+    function AS_EXP1 (T: TREE) return TREE;
+    procedure AS_EXP1 (T: TREE; V: TREE);
+    function AS_EXP2 (T: TREE) return TREE;
+    procedure AS_EXP2 (T: TREE; V: TREE);
+    function AS_ENUM_LITERAL_S (T: TREE) return TREE;
+    procedure AS_ENUM_LITERAL_S (T: TREE; V: TREE);
+    function SM_LITERAL_S (T: TREE) return TREE;
+    procedure SM_LITERAL_S (T: TREE; V: TREE);
+    function SM_POS (T: TREE) return INTEGER;
+    procedure SM_POS (T: TREE; V: INTEGER);
+    function SM_REP (T: TREE) return INTEGER;
+    procedure SM_REP (T: TREE; V: INTEGER);
+    function AS_RANGE (T: TREE) return TREE;
+    procedure AS_RANGE (T: TREE; V: TREE);
+    function CD_IMPL_SMALL (T: TREE) return TREE;
+    procedure CD_IMPL_SMALL (T: TREE; V: TREE);
+    function AS_DISCRETE_RANGE_S (T: TREE) return TREE;
+    procedure AS_DISCRETE_RANGE_S (T: TREE; V: TREE);
+    function AS_INDEX_S (T: TREE) return TREE;
+    procedure AS_INDEX_S (T: TREE; V: TREE);
+    function SM_INDEX_S (T: TREE) return TREE;
+    procedure SM_INDEX_S (T: TREE; V: TREE);
+    function SM_COMP_TYPE (T: TREE) return TREE;
+    procedure SM_COMP_TYPE (T: TREE; V: TREE);
+    function SM_INDEX_SUBTYPE_S (T: TREE) return TREE;
+    procedure SM_INDEX_SUBTYPE_S (T: TREE; V: TREE);
+    function AS_COMP_LIST (T: TREE) return TREE;
+    procedure AS_COMP_LIST (T: TREE; V: TREE);
+    function SM_DISCRIMINANT_S (T: TREE) return TREE;
+    procedure SM_DISCRIMINANT_S (T: TREE; V: TREE);
+    function SM_COMP_LIST (T: TREE) return TREE;
+    procedure SM_COMP_LIST (T: TREE; V: TREE);
+    function SM_REPRESENTATION (T: TREE) return TREE;
+    procedure SM_REPRESENTATION (T: TREE; V: TREE);
+    function SM_NORMALIZED_DSCRMT_S (T: TREE) return TREE;
+    procedure SM_NORMALIZED_DSCRMT_S (T: TREE; V: TREE);
+    function SM_COMP_REP (T: TREE) return TREE;
+    procedure SM_COMP_REP (T: TREE; V: TREE);
+    function AS_VARIANT_S (T: TREE) return TREE;
+    procedure AS_VARIANT_S (T: TREE; V: TREE);
+    function AS_CHOICE_S (T: TREE) return TREE;
+    procedure AS_CHOICE_S (T: TREE; V: TREE);
+    function AS_DECL_S (T: TREE) return TREE;
+    procedure AS_DECL_S (T: TREE; V: TREE);
+    function AS_VARIANT_PART (T: TREE) return TREE;
+    procedure AS_VARIANT_PART (T: TREE; V: TREE);
+    function AS_PRAGMA_S (T: TREE) return TREE;
+    procedure AS_PRAGMA_S (T: TREE; V: TREE);
+    function AS_PRAGMA (T: TREE) return TREE;
+    procedure AS_PRAGMA (T: TREE; V: TREE);
+    function AS_DISCRETE_RANGE (T: TREE) return TREE;
+    procedure AS_DISCRETE_RANGE (T: TREE; V: TREE);
+    function SM_STORAGE_SIZE (T: TREE) return TREE;
+    procedure SM_STORAGE_SIZE (T: TREE; V: TREE);
+    function SM_IS_CONTROLLED (T: TREE) return BOOLEAN;
+    procedure SM_IS_CONTROLLED (T: TREE; V: BOOLEAN);
+    function SM_DESIG_TYPE (T: TREE) return TREE;
+    procedure SM_DESIG_TYPE (T: TREE; V: TREE);
+    function SM_MASTER (T: TREE) return TREE;
+    procedure SM_MASTER (T: TREE; V: TREE);
+    function XD_FULL_TYPE_SPEC (T: TREE) return TREE;
+    procedure XD_FULL_TYPE_SPEC (T: TREE; V: TREE);
+    function AS_HEADER (T: TREE) return TREE;
+    procedure AS_HEADER (T: TREE; V: TREE);
+    function AS_UNIT_KIND (T: TREE) return TREE;
+    procedure AS_UNIT_KIND (T: TREE; V: TREE);
+    function SM_EXP_TYPE (T: TREE) return TREE;
+    procedure SM_EXP_TYPE (T: TREE; V: TREE);
+    function SM_VALUE (T: TREE) return TREE;
+    procedure SM_VALUE (T: TREE; V: TREE);
+    function SM_DEFN (T: TREE) return TREE;
+    procedure SM_DEFN (T: TREE; V: TREE);
+    function AS_EXP_S (T: TREE) return TREE;
+    procedure AS_EXP_S (T: TREE; V: TREE);
+    function AS_DESIGNATOR (T: TREE) return TREE;
+    procedure AS_DESIGNATOR (T: TREE; V: TREE);
+    function SM_NORMALIZED_COMP_S (T: TREE) return TREE;
+    procedure SM_NORMALIZED_COMP_S (T: TREE; V: TREE);
+    function AS_SHORT_CIRCUIT_OP (T: TREE) return TREE;
+    procedure AS_SHORT_CIRCUIT_OP (T: TREE; V: TREE);
+    function AS_MEMBERSHIP_OP (T: TREE) return TREE;
+    procedure AS_MEMBERSHIP_OP (T: TREE; V: TREE);
+    function SM_DISCRETE_RANGE (T: TREE) return TREE;
+    procedure SM_DISCRETE_RANGE (T: TREE; V: TREE);
+    function LX_NUMREP (T: TREE) return TREE;
+    procedure LX_NUMREP (T: TREE; V: TREE);
+    function AS_QUALIFIED (T: TREE) return TREE;
+    procedure AS_QUALIFIED (T: TREE; V: TREE);
+    function AS_STM (T: TREE) return TREE;
+    procedure AS_STM (T: TREE; V: TREE);
+    function AS_TEST_CLAUSE_ELEM_S (T: TREE) return TREE;
+    procedure AS_TEST_CLAUSE_ELEM_S (T: TREE; V: TREE);
+    function AS_STM_S (T: TREE) return TREE;
+    procedure AS_STM_S (T: TREE; V: TREE);
+    function SM_STM (T: TREE) return TREE;
+    procedure SM_STM (T: TREE; V: TREE);
+    function AS_ALTERNATIVE_S (T: TREE) return TREE;
+    procedure AS_ALTERNATIVE_S (T: TREE; V: TREE);
+    function AS_ITERATION (T: TREE) return TREE;
+    procedure AS_ITERATION (T: TREE; V: TREE);
+    function AS_BLOCK_BODY (T: TREE) return TREE;
+    procedure AS_BLOCK_BODY (T: TREE; V: TREE);
+    function AS_ITEM_S (T: TREE) return TREE;
+    procedure AS_ITEM_S (T: TREE; V: TREE);
+    function SM_SPEC (T: TREE) return TREE;
+    procedure SM_SPEC (T: TREE; V: TREE);
+    function XD_STUB (T: TREE) return TREE;
+    procedure XD_STUB (T: TREE; V: TREE);
+    function XD_BODY (T: TREE) return TREE;
+    procedure XD_BODY (T: TREE; V: TREE);
+    function SM_UNIT_DESC (T: TREE) return TREE;
+    procedure SM_UNIT_DESC (T: TREE; V: TREE);
+    function SM_IS_INLINE (T: TREE) return BOOLEAN;
+    procedure SM_IS_INLINE (T: TREE; V: BOOLEAN);
+    function SM_INTERFACE (T: TREE) return TREE;
+    procedure SM_INTERFACE (T: TREE; V: TREE);
+    function SM_DERIVABLE (T: TREE) return TREE;
+    procedure SM_DERIVABLE (T: TREE; V: TREE);
+    function SM_EQUAL (T: TREE) return TREE;
+    procedure SM_EQUAL (T: TREE; V: TREE);
+    function XD_NOT_EQUAL (T: TREE) return TREE;
+    procedure XD_NOT_EQUAL (T: TREE; V: TREE);
+    function AS_PARAM_S (T: TREE) return TREE;
+    procedure AS_PARAM_S (T: TREE; V: TREE);
+    function LX_DEFAULT (T: TREE) return BOOLEAN;
+    procedure LX_DEFAULT (T: TREE; V: BOOLEAN);
+    function SM_NORMALIZED_PARAM_S (T: TREE) return TREE;
+    procedure SM_NORMALIZED_PARAM_S (T: TREE; V: TREE);
+    function LX_PREFIX (T: TREE) return BOOLEAN;
+    procedure LX_PREFIX (T: TREE; V: BOOLEAN);
+    function AS_USED_NAME (T: TREE) return TREE;
+    procedure AS_USED_NAME (T: TREE; V: TREE);
+    function AS_DECL_S1 (T: TREE) return TREE;
+    procedure AS_DECL_S1 (T: TREE; V: TREE);
+    function AS_DECL_S2 (T: TREE) return TREE;
+    procedure AS_DECL_S2 (T: TREE; V: TREE);
+    function XD_BODY_IS_REQUIRED (T: TREE) return BOOLEAN;
+    procedure XD_BODY_IS_REQUIRED (T: TREE; V: BOOLEAN);
+    function AS_NAME_S (T: TREE) return TREE;
+    procedure AS_NAME_S (T: TREE; V: TREE);
+    function AS_TYPE_MARK_NAME (T: TREE) return TREE;
+    procedure AS_TYPE_MARK_NAME (T: TREE; V: TREE);
+    function SM_DECL_S (T: TREE) return TREE;
+    procedure SM_DECL_S (T: TREE; V: TREE);
+    function SM_BODY (T: TREE) return TREE;
+    procedure SM_BODY (T: TREE; V: TREE);
+    function AS_STM_S1 (T: TREE) return TREE;
+    procedure AS_STM_S1 (T: TREE; V: TREE);
+    function AS_STM_S2 (T: TREE) return TREE;
+    procedure AS_STM_S2 (T: TREE; V: TREE);
+    function AS_COMPLTN_UNIT_S (T: TREE) return TREE;
+    procedure AS_COMPLTN_UNIT_S (T: TREE; V: TREE);
+    function AS_CONTEXT_ELEM_S (T: TREE) return TREE;
+    procedure AS_CONTEXT_ELEM_S (T: TREE; V: TREE);
+    function AS_ALL_DECL (T: TREE) return TREE;
+    procedure AS_ALL_DECL (T: TREE; V: TREE);
+    function XD_TIMESTAMP (T: TREE) return INTEGER;
+    procedure XD_TIMESTAMP (T: TREE; V: INTEGER);
+    function XD_NBR_PAGES (T: TREE) return INTEGER;
+    procedure XD_NBR_PAGES (T: TREE; V: INTEGER);
+    function XD_PARENT (T: TREE) return TREE;
+    procedure XD_PARENT (T: TREE; V: TREE);
+    function XD_LIB_NAME (T: TREE) return TREE;
+    procedure XD_LIB_NAME (T: TREE; V: TREE);
+    function AS_USE_PRAGMA_S (T: TREE) return TREE;
+    procedure AS_USE_PRAGMA_S (T: TREE; V: TREE);
+    function AS_SUBUNIT_BODY (T: TREE) return TREE;
+    procedure AS_SUBUNIT_BODY (T: TREE; V: TREE);
+    function AS_BODY (T: TREE) return TREE;
+    procedure AS_BODY (T: TREE; V: TREE);
+    function SM_RENAMES_EXC (T: TREE) return TREE;
+    procedure SM_RENAMES_EXC (T: TREE; V: TREE);
+    function SM_GENERIC_PARAM_S (T: TREE) return TREE;
+    procedure SM_GENERIC_PARAM_S (T: TREE; V: TREE);
+    function AS_ALIGNMENT_CLAUSE (T: TREE) return TREE;
+    procedure AS_ALIGNMENT_CLAUSE (T: TREE; V: TREE);
+    function AS_COMP_REP_S (T: TREE) return TREE;
+    procedure AS_COMP_REP_S (T: TREE; V: TREE);
+    function XD_POS (T: TREE) return INTEGER;
+    procedure XD_POS (T: TREE; V: INTEGER);
+    function SM_OPERATOR (T: TREE) return INTEGER;
+    procedure SM_OPERATOR (T: TREE; V: INTEGER);
+    function SM_ARGUMENT_ID_S (T: TREE) return TREE;
+    procedure SM_ARGUMENT_ID_S (T: TREE; V: TREE);
+    function LX_SRCPOS (T: TREE) return TREE;
+    procedure LX_SRCPOS (T: TREE; V: TREE);
+    function XD_SOURCENAME (T: TREE) return TREE;
+    procedure XD_SOURCENAME (T: TREE; V: TREE);
+    function XD_GRAMMAR (T: TREE) return TREE;
+    procedure XD_GRAMMAR (T: TREE; V: TREE);
+    function XD_STATELIST (T: TREE) return TREE;
+    procedure XD_STATELIST (T: TREE; V: TREE);
+    function XD_STRUCTURE (T: TREE) return TREE;
+    procedure XD_STRUCTURE (T: TREE; V: TREE);
+    function SPARE_3 (T: TREE) return TREE;
+    procedure SPARE_3 (T: TREE; V: TREE);
+    function XD_NUMER (T: TREE) return TREE;
+    procedure XD_NUMER (T: TREE; V: TREE);
+    function XD_DENOM (T: TREE) return TREE;
+    procedure XD_DENOM (T: TREE; V: TREE);
+    function TW_FILENAME (T: TREE) return TREE;
+    procedure TW_FILENAME (T: TREE; V: TREE);
+    function TW_COMP_UNIT (T: TREE) return TREE;
+    procedure TW_COMP_UNIT (T: TREE; V: TREE);
+    function XD_SHORT (T: TREE) return TREE;
+    procedure XD_SHORT (T: TREE; V: TREE);
+    function XD_PRIMARY (T: TREE) return TREE;
+    procedure XD_PRIMARY (T: TREE; V: TREE);
+    function XD_SECONDARY (T: TREE) return TREE;
+    procedure XD_SECONDARY (T: TREE; V: TREE);
+    function XD_ITEM (T: TREE) return TREE;
+    procedure XD_ITEM (T: TREE; V: TREE);
+    function XD_HEADER (T: TREE) return TREE;
+    procedure XD_HEADER (T: TREE; V: TREE);
+    function XD_REGION_DEF (T: TREE) return TREE;
+    procedure XD_REGION_DEF (T: TREE; V: TREE);
+    function XD_IS_IN_SPEC (T: TREE) return BOOLEAN;
+    procedure XD_IS_IN_SPEC (T: TREE; V: BOOLEAN);
+    function XD_LEX_LEVEL (T: TREE) return INTEGER;
+    procedure XD_LEX_LEVEL (T: TREE; V: INTEGER);
+    function XD_IS_USED (T: TREE) return BOOLEAN;
+    procedure XD_IS_USED (T: TREE; V: BOOLEAN);
+
+    procedure CREATE_DIANA;
+    procedure OPEN_DIANA;
+    procedure CLOSE_DIANA;
+
+    function MAKE (C: in NODE_NAME) return TREE;
+    -- procedure DESTROY (t: in TREE);
+    function KIND (T: in TREE) return NODE_NAME;
+
+    CONST_FALSE: constant TREE := 
+            (TPG => 0, TTY => NODE_NAME'POS(DN_FALSE), TLN => 0);
+    CONST_TRUE: constant TREE := 
+            (TPG => 0, TTY => NODE_NAME'POS(DN_TRUE), TLN => 0);
+    CONST_NIL: constant TREE := 
+            (TPG => 0, TTY => NODE_NAME'POS(DN_NIL), TLN => 0);
+    CONST_VOID: constant TREE := 
+            (TPG => 0, TTY => NODE_NAME'POS(DN_VOID), TLN => 0);
+    CONST_ROOT: constant TREE := 
+            (TPG => 1, TTY => NODE_NAME'POS(DN_ROOT), TLN => 1);
+    CONST_VIRGIN: constant TREE := (TPG => SHORT(-1), TTY =>255 , TLN => 255);
+    CONST_BINARY_ZERO: constant TREE := (TPG => 0, TTY => 0, TLN => 0);
+
+    function ARITY (T: in TREE)      return ARITIES;
+    function SON1 (T: in TREE)       return TREE;
+    procedure SON1 (T: in TREE; V: in TREE);
+    function SON2 (T: in TREE)       return TREE;
+    procedure SON2 (T: in TREE; V: in TREE);
+    function SON3 (T: in TREE)       return TREE;
+    procedure SON3 (T: in TREE; V: in TREE);
+
+    function HEAD (L: in SEQ_TYPE)   return TREE;
+    function TAIL (L: in SEQ_TYPE)   return SEQ_TYPE;
+    function MAKE                    return SEQ_TYPE;
+    function IS_EMPTY (L: in SEQ_TYPE) return BOOLEAN;
+    function INSERT (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE;
+    function APPEND (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE;
+    -- make a one-element list
+    function SINGLETON (V: TREE) return SEQ_TYPE;
+    -- remove and return first element on list
+    procedure POP (L: in out SEQ_TYPE; T: out TREE);
+
+    procedure LIST (T: in TREE; V: in SEQ_TYPE);
+    function LIST (T: in TREE)       return SEQ_TYPE;
+
+    function PRINTNAME(T: TREE) return STRING; -- txtrep or symbol_rep
+    function STORETEXT(V: PNAME) return TREE; -- stores a txtrep
+    function STORESYM (V: PNAME) return TREE; -- adds to sym tbl
+    function FINDSYM (V: PNAME) return TREE; -- void if not there
+    function STORETEXT(V: STRING) return TREE; -- stores a txtrep
+    function STORESYM (V: STRING) return TREE; -- adds to sym tbl
+    function FINDSYM (V: STRING) return TREE; -- void if not there
+
+    function MAKE_SOURCE_POSITION (T: TREE; COL: NATURAL) return TREE;
+    function GET_SOURCE_LINE (T:TREE) return TREE;
+    function GET_SOURCE_COL (T:TREE) return NATURAL;
+    procedure ERROR (SP: TREE; MSG: STRING);
+    procedure WARNING (SP: TREE; MSG: STRING);
+
+    -- node representation - for debug use
+    function NODE_REP (NODE: TREE) return STRING;
+end DIANA86;
+
+--================================================
+
+with DIANAMAN; use DIANAMAN;
+with REPNODE;
+package body DIANA86 is
+
+
+    function XD_HIGH_PAGE (T: TREE) return TREE is
+	begin return D(0, T); end;
+    procedure XD_HIGH_PAGE (T: TREE; V: TREE) is
+	begin D(0, T, V); end;
+    function XD_USER_ROOT (T: TREE) return TREE is
+	begin return D(1, T); end;
+    procedure XD_USER_ROOT (T: TREE; V: TREE) is
+	begin D(1, T, V); end;
+    function XD_ERR_COUNT (T: TREE) return TREE is
+	begin return D(3, T); end;
+    procedure XD_ERR_COUNT (T: TREE; V: TREE) is
+	begin D(3, T, V); end;
+    function SPARE_1 (T: TREE) return TREE is
+	begin return D(4, T); end;
+    procedure SPARE_1 (T: TREE; V: TREE) is
+	begin D(4, T, V); end;
+    function XD_HEAD (T: TREE) return TREE is
+	begin return D(5, T); end;
+    procedure XD_HEAD (T: TREE; V: TREE) is
+	begin D(5, T, V); end;
+    function XD_TAIL (T: TREE) return TREE is
+	begin return D(6, T); end;
+    procedure XD_TAIL (T: TREE; V: TREE) is
+	begin D(6, T, V); end;
+    function XD_NUMBER (T: TREE) return TREE is
+	begin return D(7, T); end;
+    procedure XD_NUMBER (T: TREE; V: TREE) is
+	begin D(7, T, V); end;
+    function XD_SRCPOS (T: TREE) return TREE is
+	begin return D(9, T); end;
+    procedure XD_SRCPOS (T: TREE; V: TREE) is
+	begin D(9, T, V); end;
+    function XD_TEXT (T: TREE) return TREE is
+	begin return D(10, T); end;
+    procedure XD_TEXT (T: TREE; V: TREE) is
+	begin D(10, T, V); end;
+    function LX_SYMREP (T: TREE) return TREE is
+	begin return D(13, T); end;
+    procedure LX_SYMREP (T: TREE; V: TREE) is
+	begin D(13, T, V); end;
+    function XD_REGION (T: TREE) return TREE is
+	begin return D(14, T); end;
+    procedure XD_REGION (T: TREE; V: TREE) is
+	begin D(14, T, V); end;
+    function SM_OBJ_TYPE (T: TREE) return TREE is
+	begin return D(15, T); end;
+    procedure SM_OBJ_TYPE (T: TREE; V: TREE) is
+	begin D(15, T, V); end;
+    function SM_FIRST (T: TREE) return TREE is
+	begin return D(16, T); end;
+    procedure SM_FIRST (T: TREE; V: TREE) is
+	begin D(16, T, V); end;
+    function AS_USED_NAME_ID (T: TREE) return TREE is
+	begin return D(17, T); end;
+    procedure AS_USED_NAME_ID (T: TREE; V: TREE) is
+	begin D(17, T, V); end;
+    function AS_GENERAL_ASSOC_S (T: TREE) return TREE is
+	begin return D(18, T); end;
+    procedure AS_GENERAL_ASSOC_S (T: TREE; V: TREE) is
+	begin D(18, T, V); end;
+    function AS_SOURCE_NAME (T: TREE) return TREE is
+	begin return D(20, T); end;
+    procedure AS_SOURCE_NAME (T: TREE; V: TREE) is
+	begin D(20, T, V); end;
+    function AS_SOURCE_NAME_S (T: TREE) return TREE is
+	begin return D(21, T); end;
+    procedure AS_SOURCE_NAME_S (T: TREE; V: TREE) is
+	begin D(21, T, V); end;
+    function AS_EXP (T: TREE) return TREE is
+	begin return D(22, T); end;
+    procedure AS_EXP (T: TREE; V: TREE) is
+	begin D(22, T, V); end;
+    function AS_TYPE_DEF (T: TREE) return TREE is
+	begin return D(23, T); end;
+    procedure AS_TYPE_DEF (T: TREE; V: TREE) is
+	begin D(23, T, V); end;
+    function SM_INIT_EXP (T: TREE) return TREE is
+	begin return D(24, T); end;
+    procedure SM_INIT_EXP (T: TREE; V: TREE) is
+	begin D(24, T, V); end;
+    function SM_RENAMES_OBJ (T: TREE) return BOOLEAN is
+	begin return DB(25, T); end;
+    procedure SM_RENAMES_OBJ (T: TREE; V: BOOLEAN) is
+	begin DB(25, T, V); end;
+    function SM_ADDRESS (T: TREE) return TREE is
+	begin return D(26, T); end;
+    procedure SM_ADDRESS (T: TREE; V: TREE) is
+	begin D(26, T, V); end;
+    function SM_IS_SHARED (T: TREE) return BOOLEAN is
+	begin return DB(27, T); end;
+    procedure SM_IS_SHARED (T: TREE; V: BOOLEAN) is
+	begin DB(27, T, V); end;
+    function AS_DSCRMT_DECL_S (T: TREE) return TREE is
+	begin return D(28, T); end;
+    procedure AS_DSCRMT_DECL_S (T: TREE; V: TREE) is
+	begin D(28, T, V); end;
+    function SM_TYPE_SPEC (T: TREE) return TREE is
+	begin return D(29, T); end;
+    procedure SM_TYPE_SPEC (T: TREE; V: TREE) is
+	begin D(29, T, V); end;
+    function AS_SUBTYPE_INDICATION (T: TREE) return TREE is
+	begin return D(30, T); end;
+    procedure AS_SUBTYPE_INDICATION (T: TREE; V: TREE) is
+	begin D(30, T, V); end;
+    function XD_SOURCE_NAME (T: TREE) return TREE is
+	begin return D(31, T); end;
+    procedure XD_SOURCE_NAME (T: TREE; V: TREE) is
+	begin D(31, T, V); end;
+    function SM_DERIVED (T: TREE) return TREE is
+	begin return D(32, T); end;
+    procedure SM_DERIVED (T: TREE; V: TREE) is
+	begin D(32, T, V); end;
+    function SM_IS_ANONYMOUS (T: TREE) return BOOLEAN is
+	begin return DB(33, T); end;
+    procedure SM_IS_ANONYMOUS (T: TREE; V: BOOLEAN) is
+	begin DB(33, T, V); end;
+    function SM_BASE_TYPE (T: TREE) return TREE is
+	begin return D(34, T); end;
+    procedure SM_BASE_TYPE (T: TREE; V: TREE) is
+	begin D(34, T, V); end;
+    function SM_RANGE (T: TREE) return TREE is
+	begin return D(35, T); end;
+    procedure SM_RANGE (T: TREE; V: TREE) is
+	begin D(35, T, V); end;
+    function CD_IMPL_SIZE (T: TREE) return INTEGER is
+	begin return DI(36, T); end;
+    procedure CD_IMPL_SIZE (T: TREE; V: INTEGER) is
+	begin DI(36, T, V); end;
+    function SM_ACCURACY (T: TREE) return TREE is
+	begin return D(37, T); end;
+    procedure SM_ACCURACY (T: TREE; V: TREE) is
+	begin D(37, T, V); end;
+    function SM_SIZE (T: TREE) return TREE is
+	begin return D(38, T); end;
+    procedure SM_SIZE (T: TREE; V: TREE) is
+	begin D(38, T, V); end;
+    function SM_IS_LIMITED (T: TREE) return BOOLEAN is
+	begin return DB(39, T); end;
+    procedure SM_IS_LIMITED (T: TREE; V: BOOLEAN) is
+	begin DB(39, T, V); end;
+    function SM_IS_PACKED (T: TREE) return BOOLEAN is
+	begin return DB(40, T); end;
+    procedure SM_IS_PACKED (T: TREE; V: BOOLEAN) is
+	begin DB(40, T, V); end;
+    function SM_DEPENDS_ON_DSCRMT (T: TREE) return BOOLEAN is
+	begin return DB(41, T); end;
+    procedure SM_DEPENDS_ON_DSCRMT (T: TREE; V: BOOLEAN) is
+	begin DB(41, T, V); end;
+    function AS_CONSTRAINT (T: TREE) return TREE is
+	begin return D(42, T); end;
+    procedure AS_CONSTRAINT (T: TREE; V: TREE) is
+	begin D(42, T, V); end;
+    function AS_NAME (T: TREE) return TREE is
+	begin return D(43, T); end;
+    procedure AS_NAME (T: TREE; V: TREE) is
+	begin D(43, T, V); end;
+    function AS_EXP1 (T: TREE) return TREE is
+	begin return D(45, T); end;
+    procedure AS_EXP1 (T: TREE; V: TREE) is
+	begin D(45, T, V); end;
+    function AS_EXP2 (T: TREE) return TREE is
+	begin return D(46, T); end;
+    procedure AS_EXP2 (T: TREE; V: TREE) is
+	begin D(46, T, V); end;
+    function AS_ENUM_LITERAL_S (T: TREE) return TREE is
+	begin return D(47, T); end;
+    procedure AS_ENUM_LITERAL_S (T: TREE; V: TREE) is
+	begin D(47, T, V); end;
+    function SM_LITERAL_S (T: TREE) return TREE is
+	begin return D(48, T); end;
+    procedure SM_LITERAL_S (T: TREE; V: TREE) is
+	begin D(48, T, V); end;
+    function SM_POS (T: TREE) return INTEGER is
+	begin return DI(49, T); end;
+    procedure SM_POS (T: TREE; V: INTEGER) is
+	begin DI(49, T, V); end;
+    function SM_REP (T: TREE) return INTEGER is
+	begin return DI(50, T); end;
+    procedure SM_REP (T: TREE; V: INTEGER) is
+	begin DI(50, T, V); end;
+    function AS_RANGE (T: TREE) return TREE is
+	begin return D(51, T); end;
+    procedure AS_RANGE (T: TREE; V: TREE) is
+	begin D(51, T, V); end;
+    function CD_IMPL_SMALL (T: TREE) return TREE is
+	begin return D(52, T); end;
+    procedure CD_IMPL_SMALL (T: TREE; V: TREE) is
+	begin D(52, T, V); end;
+    function AS_DISCRETE_RANGE_S (T: TREE) return TREE is
+	begin return D(53, T); end;
+    procedure AS_DISCRETE_RANGE_S (T: TREE; V: TREE) is
+	begin D(53, T, V); end;
+    function AS_INDEX_S (T: TREE) return TREE is
+	begin return D(54, T); end;
+    procedure AS_INDEX_S (T: TREE; V: TREE) is
+	begin D(54, T, V); end;
+    function SM_INDEX_S (T: TREE) return TREE is
+	begin return D(55, T); end;
+    procedure SM_INDEX_S (T: TREE; V: TREE) is
+	begin D(55, T, V); end;
+    function SM_COMP_TYPE (T: TREE) return TREE is
+	begin return D(56, T); end;
+    procedure SM_COMP_TYPE (T: TREE; V: TREE) is
+	begin D(56, T, V); end;
+    function SM_INDEX_SUBTYPE_S (T: TREE) return TREE is
+	begin return D(57, T); end;
+    procedure SM_INDEX_SUBTYPE_S (T: TREE; V: TREE) is
+	begin D(57, T, V); end;
+    function AS_COMP_LIST (T: TREE) return TREE is
+	begin return D(58, T); end;
+    procedure AS_COMP_LIST (T: TREE; V: TREE) is
+	begin D(58, T, V); end;
+    function SM_DISCRIMINANT_S (T: TREE) return TREE is
+	begin return D(59, T); end;
+    procedure SM_DISCRIMINANT_S (T: TREE; V: TREE) is
+	begin D(59, T, V); end;
+    function SM_COMP_LIST (T: TREE) return TREE is
+	begin return D(60, T); end;
+    procedure SM_COMP_LIST (T: TREE; V: TREE) is
+	begin D(60, T, V); end;
+    function SM_REPRESENTATION (T: TREE) return TREE is
+	begin return D(61, T); end;
+    procedure SM_REPRESENTATION (T: TREE; V: TREE) is
+	begin D(61, T, V); end;
+    function SM_NORMALIZED_DSCRMT_S (T: TREE) return TREE is
+	begin return D(62, T); end;
+    procedure SM_NORMALIZED_DSCRMT_S (T: TREE; V: TREE) is
+	begin D(62, T, V); end;
+    function SM_COMP_REP (T: TREE) return TREE is
+	begin return D(63, T); end;
+    procedure SM_COMP_REP (T: TREE; V: TREE) is
+	begin D(63, T, V); end;
+    function AS_VARIANT_S (T: TREE) return TREE is
+	begin return D(64, T); end;
+    procedure AS_VARIANT_S (T: TREE; V: TREE) is
+	begin D(64, T, V); end;
+    function AS_CHOICE_S (T: TREE) return TREE is
+	begin return D(65, T); end;
+    procedure AS_CHOICE_S (T: TREE; V: TREE) is
+	begin D(65, T, V); end;
+    function AS_DECL_S (T: TREE) return TREE is
+	begin return D(66, T); end;
+    procedure AS_DECL_S (T: TREE; V: TREE) is
+	begin D(66, T, V); end;
+    function AS_VARIANT_PART (T: TREE) return TREE is
+	begin return D(67, T); end;
+    procedure AS_VARIANT_PART (T: TREE; V: TREE) is
+	begin D(67, T, V); end;
+    function AS_PRAGMA_S (T: TREE) return TREE is
+	begin return D(68, T); end;
+    procedure AS_PRAGMA_S (T: TREE; V: TREE) is
+	begin D(68, T, V); end;
+    function AS_PRAGMA (T: TREE) return TREE is
+	begin return D(69, T); end;
+    procedure AS_PRAGMA (T: TREE; V: TREE) is
+	begin D(69, T, V); end;
+    function AS_DISCRETE_RANGE (T: TREE) return TREE is
+	begin return D(70, T); end;
+    procedure AS_DISCRETE_RANGE (T: TREE; V: TREE) is
+	begin D(70, T, V); end;
+    function SM_STORAGE_SIZE (T: TREE) return TREE is
+	begin return D(71, T); end;
+    procedure SM_STORAGE_SIZE (T: TREE; V: TREE) is
+	begin D(71, T, V); end;
+    function SM_IS_CONTROLLED (T: TREE) return BOOLEAN is
+	begin return DB(72, T); end;
+    procedure SM_IS_CONTROLLED (T: TREE; V: BOOLEAN) is
+	begin DB(72, T, V); end;
+    function SM_DESIG_TYPE (T: TREE) return TREE is
+	begin return D(73, T); end;
+    procedure SM_DESIG_TYPE (T: TREE; V: TREE) is
+	begin D(73, T, V); end;
+    function SM_MASTER (T: TREE) return TREE is
+	begin return D(74, T); end;
+    procedure SM_MASTER (T: TREE; V: TREE) is
+	begin D(74, T, V); end;
+    function XD_FULL_TYPE_SPEC (T: TREE) return TREE is
+	begin return D(75, T); end;
+    procedure XD_FULL_TYPE_SPEC (T: TREE; V: TREE) is
+	begin D(75, T, V); end;
+    function AS_HEADER (T: TREE) return TREE is
+	begin return D(76, T); end;
+    procedure AS_HEADER (T: TREE; V: TREE) is
+	begin D(76, T, V); end;
+    function AS_UNIT_KIND (T: TREE) return TREE is
+	begin return D(77, T); end;
+    procedure AS_UNIT_KIND (T: TREE; V: TREE) is
+	begin D(77, T, V); end;
+    function SM_EXP_TYPE (T: TREE) return TREE is
+	begin return D(78, T); end;
+    procedure SM_EXP_TYPE (T: TREE; V: TREE) is
+	begin D(78, T, V); end;
+    function SM_VALUE (T: TREE) return TREE is
+	begin return D(79, T); end;
+    procedure SM_VALUE (T: TREE; V: TREE) is
+	begin D(79, T, V); end;
+    function SM_DEFN (T: TREE) return TREE is
+	begin return D(80, T); end;
+    procedure SM_DEFN (T: TREE; V: TREE) is
+	begin D(80, T, V); end;
+    function AS_EXP_S (T: TREE) return TREE is
+	begin return D(81, T); end;
+    procedure AS_EXP_S (T: TREE; V: TREE) is
+	begin D(81, T, V); end;
+    function AS_DESIGNATOR (T: TREE) return TREE is
+	begin return D(82, T); end;
+    procedure AS_DESIGNATOR (T: TREE; V: TREE) is
+	begin D(82, T, V); end;
+    function SM_NORMALIZED_COMP_S (T: TREE) return TREE is
+	begin return D(83, T); end;
+    procedure SM_NORMALIZED_COMP_S (T: TREE; V: TREE) is
+	begin D(83, T, V); end;
+    function AS_SHORT_CIRCUIT_OP (T: TREE) return TREE is
+	begin return D(84, T); end;
+    procedure AS_SHORT_CIRCUIT_OP (T: TREE; V: TREE) is
+	begin D(84, T, V); end;
+    function AS_MEMBERSHIP_OP (T: TREE) return TREE is
+	begin return D(85, T); end;
+    procedure AS_MEMBERSHIP_OP (T: TREE; V: TREE) is
+	begin D(85, T, V); end;
+    function SM_DISCRETE_RANGE (T: TREE) return TREE is
+	begin return D(86, T); end;
+    procedure SM_DISCRETE_RANGE (T: TREE; V: TREE) is
+	begin D(86, T, V); end;
+    function LX_NUMREP (T: TREE) return TREE is
+	begin return D(87, T); end;
+    procedure LX_NUMREP (T: TREE; V: TREE) is
+	begin D(87, T, V); end;
+    function AS_QUALIFIED (T: TREE) return TREE is
+	begin return D(88, T); end;
+    procedure AS_QUALIFIED (T: TREE; V: TREE) is
+	begin D(88, T, V); end;
+    function AS_STM (T: TREE) return TREE is
+	begin return D(89, T); end;
+    procedure AS_STM (T: TREE; V: TREE) is
+	begin D(89, T, V); end;
+    function AS_TEST_CLAUSE_ELEM_S (T: TREE) return TREE is
+	begin return D(90, T); end;
+    procedure AS_TEST_CLAUSE_ELEM_S (T: TREE; V: TREE) is
+	begin D(90, T, V); end;
+    function AS_STM_S (T: TREE) return TREE is
+	begin return D(91, T); end;
+    procedure AS_STM_S (T: TREE; V: TREE) is
+	begin D(91, T, V); end;
+    function SM_STM (T: TREE) return TREE is
+	begin return D(92, T); end;
+    procedure SM_STM (T: TREE; V: TREE) is
+	begin D(92, T, V); end;
+    function AS_ALTERNATIVE_S (T: TREE) return TREE is
+	begin return D(93, T); end;
+    procedure AS_ALTERNATIVE_S (T: TREE; V: TREE) is
+	begin D(93, T, V); end;
+    function AS_ITERATION (T: TREE) return TREE is
+	begin return D(94, T); end;
+    procedure AS_ITERATION (T: TREE; V: TREE) is
+	begin D(94, T, V); end;
+    function AS_BLOCK_BODY (T: TREE) return TREE is
+	begin return D(95, T); end;
+    procedure AS_BLOCK_BODY (T: TREE; V: TREE) is
+	begin D(95, T, V); end;
+    function AS_ITEM_S (T: TREE) return TREE is
+	begin return D(96, T); end;
+    procedure AS_ITEM_S (T: TREE; V: TREE) is
+	begin D(96, T, V); end;
+    function SM_SPEC (T: TREE) return TREE is
+	begin return D(97, T); end;
+    procedure SM_SPEC (T: TREE; V: TREE) is
+	begin D(97, T, V); end;
+    function XD_STUB (T: TREE) return TREE is
+	begin return D(98, T); end;
+    procedure XD_STUB (T: TREE; V: TREE) is
+	begin D(98, T, V); end;
+    function XD_BODY (T: TREE) return TREE is
+	begin return D(99, T); end;
+    procedure XD_BODY (T: TREE; V: TREE) is
+	begin D(99, T, V); end;
+    function SM_UNIT_DESC (T: TREE) return TREE is
+	begin return D(100, T); end;
+    procedure SM_UNIT_DESC (T: TREE; V: TREE) is
+	begin D(100, T, V); end;
+    function SM_IS_INLINE (T: TREE) return BOOLEAN is
+	begin return DB(101, T); end;
+    procedure SM_IS_INLINE (T: TREE; V: BOOLEAN) is
+	begin DB(101, T, V); end;
+    function SM_INTERFACE (T: TREE) return TREE is
+	begin return D(102, T); end;
+    procedure SM_INTERFACE (T: TREE; V: TREE) is
+	begin D(102, T, V); end;
+    function SM_DERIVABLE (T: TREE) return TREE is
+	begin return D(103, T); end;
+    procedure SM_DERIVABLE (T: TREE; V: TREE) is
+	begin D(103, T, V); end;
+    function SM_EQUAL (T: TREE) return TREE is
+	begin return D(104, T); end;
+    procedure SM_EQUAL (T: TREE; V: TREE) is
+	begin D(104, T, V); end;
+    function XD_NOT_EQUAL (T: TREE) return TREE is
+	begin return D(105, T); end;
+    procedure XD_NOT_EQUAL (T: TREE; V: TREE) is
+	begin D(105, T, V); end;
+    function AS_PARAM_S (T: TREE) return TREE is
+	begin return D(106, T); end;
+    procedure AS_PARAM_S (T: TREE; V: TREE) is
+	begin D(106, T, V); end;
+    function LX_DEFAULT (T: TREE) return BOOLEAN is
+	begin return DB(107, T); end;
+    procedure LX_DEFAULT (T: TREE; V: BOOLEAN) is
+	begin DB(107, T, V); end;
+    function SM_NORMALIZED_PARAM_S (T: TREE) return TREE is
+	begin return D(108, T); end;
+    procedure SM_NORMALIZED_PARAM_S (T: TREE; V: TREE) is
+	begin D(108, T, V); end;
+    function LX_PREFIX (T: TREE) return BOOLEAN is
+	begin return DB(109, T); end;
+    procedure LX_PREFIX (T: TREE; V: BOOLEAN) is
+	begin DB(109, T, V); end;
+    function AS_USED_NAME (T: TREE) return TREE is
+	begin return D(110, T); end;
+    procedure AS_USED_NAME (T: TREE; V: TREE) is
+	begin D(110, T, V); end;
+    function AS_DECL_S1 (T: TREE) return TREE is
+	begin return D(111, T); end;
+    procedure AS_DECL_S1 (T: TREE; V: TREE) is
+	begin D(111, T, V); end;
+    function AS_DECL_S2 (T: TREE) return TREE is
+	begin return D(112, T); end;
+    procedure AS_DECL_S2 (T: TREE; V: TREE) is
+	begin D(112, T, V); end;
+    function XD_BODY_IS_REQUIRED (T: TREE) return BOOLEAN is
+	begin return DB(113, T); end;
+    procedure XD_BODY_IS_REQUIRED (T: TREE; V: BOOLEAN) is
+	begin DB(113, T, V); end;
+    function AS_NAME_S (T: TREE) return TREE is
+	begin return D(114, T); end;
+    procedure AS_NAME_S (T: TREE; V: TREE) is
+	begin D(114, T, V); end;
+    function AS_TYPE_MARK_NAME (T: TREE) return TREE is
+	begin return D(115, T); end;
+    procedure AS_TYPE_MARK_NAME (T: TREE; V: TREE) is
+	begin D(115, T, V); end;
+    function SM_DECL_S (T: TREE) return TREE is
+	begin return D(116, T); end;
+    procedure SM_DECL_S (T: TREE; V: TREE) is
+	begin D(116, T, V); end;
+    function SM_BODY (T: TREE) return TREE is
+	begin return D(117, T); end;
+    procedure SM_BODY (T: TREE; V: TREE) is
+	begin D(117, T, V); end;
+    function AS_STM_S1 (T: TREE) return TREE is
+	begin return D(118, T); end;
+    procedure AS_STM_S1 (T: TREE; V: TREE) is
+	begin D(118, T, V); end;
+    function AS_STM_S2 (T: TREE) return TREE is
+	begin return D(119, T); end;
+    procedure AS_STM_S2 (T: TREE; V: TREE) is
+	begin D(119, T, V); end;
+    function AS_COMPLTN_UNIT_S (T: TREE) return TREE is
+	begin return D(120, T); end;
+    procedure AS_COMPLTN_UNIT_S (T: TREE; V: TREE) is
+	begin D(120, T, V); end;
+    function AS_CONTEXT_ELEM_S (T: TREE) return TREE is
+	begin return D(121, T); end;
+    procedure AS_CONTEXT_ELEM_S (T: TREE; V: TREE) is
+	begin D(121, T, V); end;
+    function AS_ALL_DECL (T: TREE) return TREE is
+	begin return D(122, T); end;
+    procedure AS_ALL_DECL (T: TREE; V: TREE) is
+	begin D(122, T, V); end;
+    function XD_TIMESTAMP (T: TREE) return INTEGER is
+	begin return DI(123, T); end;
+    procedure XD_TIMESTAMP (T: TREE; V: INTEGER) is
+	begin DI(123, T, V); end;
+    function XD_NBR_PAGES (T: TREE) return INTEGER is
+	begin return DI(125, T); end;
+    procedure XD_NBR_PAGES (T: TREE; V: INTEGER) is
+	begin DI(125, T, V); end;
+    function XD_PARENT (T: TREE) return TREE is
+	begin return D(126, T); end;
+    procedure XD_PARENT (T: TREE; V: TREE) is
+	begin D(126, T, V); end;
+    function XD_LIB_NAME (T: TREE) return TREE is
+	begin return D(127, T); end;
+    procedure XD_LIB_NAME (T: TREE; V: TREE) is
+	begin D(127, T, V); end;
+    function AS_USE_PRAGMA_S (T: TREE) return TREE is
+	begin return D(128, T); end;
+    procedure AS_USE_PRAGMA_S (T: TREE; V: TREE) is
+	begin D(128, T, V); end;
+    function AS_SUBUNIT_BODY (T: TREE) return TREE is
+	begin return D(129, T); end;
+    procedure AS_SUBUNIT_BODY (T: TREE; V: TREE) is
+	begin D(129, T, V); end;
+    function AS_BODY (T: TREE) return TREE is
+	begin return D(130, T); end;
+    procedure AS_BODY (T: TREE; V: TREE) is
+	begin D(130, T, V); end;
+    function SM_RENAMES_EXC (T: TREE) return TREE is
+	begin return D(131, T); end;
+    procedure SM_RENAMES_EXC (T: TREE; V: TREE) is
+	begin D(131, T, V); end;
+    function SM_GENERIC_PARAM_S (T: TREE) return TREE is
+	begin return D(132, T); end;
+    procedure SM_GENERIC_PARAM_S (T: TREE; V: TREE) is
+	begin D(132, T, V); end;
+    function AS_ALIGNMENT_CLAUSE (T: TREE) return TREE is
+	begin return D(133, T); end;
+    procedure AS_ALIGNMENT_CLAUSE (T: TREE; V: TREE) is
+	begin D(133, T, V); end;
+    function AS_COMP_REP_S (T: TREE) return TREE is
+	begin return D(134, T); end;
+    procedure AS_COMP_REP_S (T: TREE; V: TREE) is
+	begin D(134, T, V); end;
+    function XD_POS (T: TREE) return INTEGER is
+	begin return DI(135, T); end;
+    procedure XD_POS (T: TREE; V: INTEGER) is
+	begin DI(135, T, V); end;
+    function SM_OPERATOR (T: TREE) return INTEGER is
+	begin return DI(136, T); end;
+    procedure SM_OPERATOR (T: TREE; V: INTEGER) is
+	begin DI(136, T, V); end;
+    function SM_ARGUMENT_ID_S (T: TREE) return TREE is
+	begin return D(137, T); end;
+    procedure SM_ARGUMENT_ID_S (T: TREE; V: TREE) is
+	begin D(137, T, V); end;
+    function LX_SRCPOS (T: TREE) return TREE is
+	begin return D(138, T); end;
+    procedure LX_SRCPOS (T: TREE; V: TREE) is
+	begin D(138, T, V); end;
+    function XD_SOURCENAME (T: TREE) return TREE is
+	begin return D(139, T); end;
+    procedure XD_SOURCENAME (T: TREE; V: TREE) is
+	begin D(139, T, V); end;
+    function XD_GRAMMAR (T: TREE) return TREE is
+	begin return D(140, T); end;
+    procedure XD_GRAMMAR (T: TREE; V: TREE) is
+	begin D(140, T, V); end;
+    function XD_STATELIST (T: TREE) return TREE is
+	begin return D(141, T); end;
+    procedure XD_STATELIST (T: TREE; V: TREE) is
+	begin D(141, T, V); end;
+    function XD_STRUCTURE (T: TREE) return TREE is
+	begin return D(142, T); end;
+    procedure XD_STRUCTURE (T: TREE; V: TREE) is
+	begin D(142, T, V); end;
+    function SPARE_3 (T: TREE) return TREE is
+	begin return D(143, T); end;
+    procedure SPARE_3 (T: TREE; V: TREE) is
+	begin D(143, T, V); end;
+    function XD_NUMER (T: TREE) return TREE is
+	begin return D(144, T); end;
+    procedure XD_NUMER (T: TREE; V: TREE) is
+	begin D(144, T, V); end;
+    function XD_DENOM (T: TREE) return TREE is
+	begin return D(145, T); end;
+    procedure XD_DENOM (T: TREE; V: TREE) is
+	begin D(145, T, V); end;
+    function TW_FILENAME (T: TREE) return TREE is
+	begin return D(146, T); end;
+    procedure TW_FILENAME (T: TREE; V: TREE) is
+	begin D(146, T, V); end;
+    function TW_COMP_UNIT (T: TREE) return TREE is
+	begin return D(147, T); end;
+    procedure TW_COMP_UNIT (T: TREE; V: TREE) is
+	begin D(147, T, V); end;
+    function XD_SHORT (T: TREE) return TREE is
+	begin return D(148, T); end;
+    procedure XD_SHORT (T: TREE; V: TREE) is
+	begin D(148, T, V); end;
+    function XD_PRIMARY (T: TREE) return TREE is
+	begin return D(149, T); end;
+    procedure XD_PRIMARY (T: TREE; V: TREE) is
+	begin D(149, T, V); end;
+    function XD_SECONDARY (T: TREE) return TREE is
+	begin return D(150, T); end;
+    procedure XD_SECONDARY (T: TREE; V: TREE) is
+	begin D(150, T, V); end;
+    function XD_ITEM (T: TREE) return TREE is
+	begin return D(151, T); end;
+    procedure XD_ITEM (T: TREE; V: TREE) is
+	begin D(151, T, V); end;
+    function XD_HEADER (T: TREE) return TREE is
+	begin return D(152, T); end;
+    procedure XD_HEADER (T: TREE; V: TREE) is
+	begin D(152, T, V); end;
+    function XD_REGION_DEF (T: TREE) return TREE is
+	begin return D(153, T); end;
+    procedure XD_REGION_DEF (T: TREE; V: TREE) is
+	begin D(153, T, V); end;
+    function XD_IS_IN_SPEC (T: TREE) return BOOLEAN is
+	begin return DB(154, T); end;
+    procedure XD_IS_IN_SPEC (T: TREE; V: BOOLEAN) is
+	begin DB(154, T, V); end;
+    function XD_LEX_LEVEL (T: TREE) return INTEGER is
+	begin return DI(155, T); end;
+    procedure XD_LEX_LEVEL (T: TREE; V: INTEGER) is
+	begin DI(155, T, V); end;
+    function XD_IS_USED (T: TREE) return BOOLEAN is
+	begin return DB(156, T); end;
+    procedure XD_IS_USED (T: TREE; V: BOOLEAN) is
+	begin DB(156, T, V); end;
+
+    procedure CREATE_DIANA is
+    begin
+        DIANAMAN.CREATE_IDL("DIANA");
+    end;
+    procedure OPEN_DIANA is
+    begin
+        DIANAMAN.OPEN_IDL("DIANA");
+    end;
+    procedure CLOSE_DIANA is
+    begin
+        DIANAMAN.CLOSE_DIANA;
+    end;
+
+    function MAKE (C: in NODE_NAME) return TREE is
+    begin
+        return DIANAMAN.MAKE(NODE_NAME'POS(C));
+    end;
+    function KIND (T: in TREE) return NODE_NAME is
+    begin
+        if (T.TPG >= 0
+                and then T.TTY <= NODE_NAME'POS(NODE_NAME'LAST))
+        or else (T.TLN = 0 and then T.TTY = NODE_NAME'POS(DN_NUM_VAL)) then
+            return NODE_NAME'VAL(T.TTY);
+        else
+            QUIT("KIND: invalid tree " & NODE_REP(T));
+        end if;
+    end;
+
+    function ARITY (T: in TREE)      return ARITIES is
+    begin
+        return DIANAMAN.ARITY(T);
+    end;
+    function SON1 (T: in TREE)       return TREE is
+    begin
+        return DIANAMAN.SON1(T);
+    end;
+    procedure SON1 (T: in TREE; V: in TREE) is
+    begin
+        DIANAMAN.SON1(T, V);
+    end;
+    function SON2 (T: in TREE)       return TREE is
+    begin
+        return DIANAMAN.SON2(T);
+    end;
+    procedure SON2 (T: in TREE; V: in TREE) is
+    begin
+        DIANAMAN.SON2(T, V);
+    end;
+    function SON3 (T: in TREE)       return TREE is
+    begin
+        return DIANAMAN.SON3(T);
+    end;
+    procedure SON3 (T: in TREE; V: in TREE) is
+    begin
+        DIANAMAN.SON3(T, V);
+    end;
+
+    function HEAD (L: in SEQ_TYPE)   return TREE is
+    begin
+        return DIANAMAN.HEAD(L);
+    end;
+    function TAIL (L: in SEQ_TYPE)   return SEQ_TYPE is
+    begin
+        return DIANAMAN.TAIL(L);
+    end;
+    function MAKE                    return SEQ_TYPE is
+    begin
+        return DIANAMAN.MAKE;
+    end;
+    function IS_EMPTY (L: in SEQ_TYPE) return BOOLEAN is
+    begin
+        return DIANAMAN.IS_EMPTY(L);
+    end;
+    function INSERT (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE is
+    begin
+        return DIANAMAN.INSERT(L, T);
+    end;
+    function APPEND (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE is
+    begin
+        return DIANAMAN.APPEND(L, T);
+    end;
+    function SINGLETON (V: TREE) return SEQ_TYPE is
+    begin
+        return DIANAMAN.SINGLETON(V);
+    end;
+    procedure POP (L: in out SEQ_TYPE; T: out TREE) is
+    begin
+        DIANAMAN.POP(L, T);
+    end;
+
+    procedure LIST (T: in TREE; V: in SEQ_TYPE) is
+    begin
+        DIANAMAN.LIST(T, V);
+    end;
+    function LIST (T: in TREE)       return SEQ_TYPE is
+    begin
+        return DIANAMAN.LIST(T);
+    end;
+
+    function PRINTNAME(T: TREE) return STRING is
+    begin
+        return DIANAMAN.PRINTNAME(T);
+    end;
+    function STORETEXT(V: PNAME) return TREE is
+    begin
+        return DIANAMAN.STORETEXT(V);
+    end;
+    function STORESYM (V: PNAME) return TREE is
+    begin
+        return DIANAMAN.STORESYM(V);
+    end;
+    function FINDSYM (V: PNAME) return TREE is
+    begin
+        return DIANAMAN.FINDSYM(V);
+    end;
+    function STORETEXT(V: STRING) return TREE is
+    begin
+        return DIANAMAN.STORETEXT(V);
+    end;
+    function STORESYM (V: STRING) return TREE is
+    begin
+        return DIANAMAN.STORESYM(V);
+    end;
+    function FINDSYM (V: STRING) return TREE is
+    begin
+        return DIANAMAN.FINDSYM(V);
+    end;
+
+    function MAKE_SOURCE_POSITION (T: TREE; COL: NATURAL) return TREE
+    is
+    begin
+        return DIANAMAN.MAKE_SOURCE_POSITION(T, COL);
+    end;
+    function GET_SOURCE_LINE (T:TREE) return TREE is
+    begin
+        return DIANAMAN.GET_SOURCE_LINE(T);
+    end;
+    function GET_SOURCE_COL (T:TREE) return NATURAL is
+    begin
+        return DIANAMAN.GET_SOURCE_COL(T);
+    end;
+    procedure ERROR (SP: TREE; MSG: STRING) is
+    begin
+        DIANAMAN.ERROR(SP, MSG);
+    end;
+    procedure WARNING (SP: TREE; MSG: STRING) is
+    begin
+        DIANAMAN.WARNING(SP, MSG);
+    end;
+
+    function NODE_REP (NODE: TREE) return STRING is
+    begin
+        return REPNODE.NODE_REP(NODE);
+    end;
+end DIANA86;

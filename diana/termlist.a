@@ -1,0 +1,166 @@
+with DIANAMAN, LALRIDL;
+use  DIANAMAN, LALRIDL;
+package body TERMLIST is
+
+  function SAME(L1, L2: SEQ_TYPE) return BOOLEAN is
+  begin
+    return L1.H = L2.H;
+  end SAME;
+
+  function UNION (L1: SEQ_TYPE; V: TREE) return SEQ_TYPE is
+    N1, NV:	INTEGER;
+    H1: 	TREE;
+    T1, L :	SEQ_TYPE;
+  begin
+    if IS_EMPTY(L1) then
+      return INSERT(L1, V);
+    else
+      H1 := HEAD (L1);
+      N1 := DI(XD_TER_NBR, H1);
+      NV := DI(XD_TER_NBR, V);
+      if N1 = NV then
+	return L1;
+      elsif N1 < NV then
+	T1 := TAIL (L1);
+	L := UNION (T1, V);
+	if SAME (T1, L) then
+	  return L1;
+	else
+	  return INSERT (L, H1);
+	end if;
+      else -- since N1 > NV
+	return INSERT (L1, V);
+      end if;
+    end if;
+  end UNION;
+
+  function UNION (L1: SEQ_TYPE; L2: SEQ_TYPE) return SEQ_TYPE is
+    N1, N2 :	INTEGER;
+    H1, H2 :	TREE;
+    T1, T2, L : SEQ_TYPE;
+  begin
+    if IS_EMPTY (L1) then
+      return L2;
+    elsif IS_EMPTY (L2) or else SAME(L1,L2) then
+      return L1;
+    else
+      H1 := HEAD (L1);
+      H2 := HEAD (L2);
+      N1 := DI(XD_TER_NBR, H1);
+      N2 := DI(XD_TER_NBR, H2);
+      if N1 = N2 then
+	T1 := TAIL (L1);
+	T2 := TAIL (L2);
+	L := UNION (T1, T2);
+	if SAME (L, T1) then
+	  return L1;
+	elsif SAME (L, T2) then
+	  return L2;
+	else
+	  return INSERT (L, H1);
+	end if;
+      elsif N1 > N2 then
+	return UNION (L2, L1);
+      else -- since N1 < N2
+	T1 := TAIL(L1);
+	L := UNION(T1, L2);
+	if same (L, T1) then
+	  return L1;
+	else
+	  return INSERT (L, H1);
+	end if;
+      end if;
+    end if;
+  end UNION;
+
+  function MEMBER (L1: SEQ_TYPE; V: TREE) return BOOLEAN is
+    N1, NV:	INTEGER;
+    H1 :	TREE;
+  begin
+    if IS_EMPTY (L1) then
+      return FALSE;
+    else
+      H1 := HEAD (L1);
+      N1 := DI(XD_TER_NBR, H1);
+      NV := DI(XD_TER_NBR, V);
+      if N1 = NV then
+	return TRUE;
+      elsif NV < N1 then
+	return FALSE;
+      else -- SINCE NV > N1
+	return MEMBER (TAIL (L1), V);
+      end if;
+    end if;
+  end MEMBER;
+
+  function R_UNION (L1: SEQ_TYPE; V: TREE) return SEQ_TYPE is
+    N1, NV:	INTEGER;
+    H1: 	TREE;
+    T1, L :	SEQ_TYPE;
+  begin
+    if IS_EMPTY(L1) then
+      return INSERT(L1, V);
+    else
+      H1 := HEAD (L1);
+      if H1 = V then
+	return L1;
+      end if;
+      N1 := DI(XD_RULE_NBR, D(XD_RULEINFO,H1));
+      NV := DI(XD_RULE_NBR, D(XD_RULEINFO,V));
+      if N1 < NV then
+	T1 := TAIL (L1);
+	L := R_UNION (T1, V);
+	if SAME (T1, L) then
+	  return L1;
+	else
+	  return INSERT (L, H1);
+	end if;
+      else -- since N1 > NV
+	return INSERT (L1, V);
+      end if;
+    end if;
+  end R_UNION;
+
+  function R_UNION (L1: SEQ_TYPE; L2: SEQ_TYPE) return SEQ_TYPE is
+    N1, N2 :	INTEGER;
+    H1, H2 :	TREE;
+    T1, T2, L : SEQ_TYPE;
+  begin
+    if IS_EMPTY (L1) then
+      return L2;
+    elsif IS_EMPTY (L2) or else SAME(L1,L2) then
+      return L1;
+    else
+      H1 := HEAD (L1);
+      H2 := HEAD (L2);
+      if H1 = H2 then
+	T1 := TAIL (L1);
+	T2 := TAIL (L2);
+	L := R_UNION (T1, T2);
+	if SAME (L, T1) then
+	  return L1;
+	elsif SAME (L, T2) then
+	  return L2;
+	else
+	  return INSERT (L, H1);
+	end if;
+      end if;
+      N1 := DI(XD_RULE_NBR, D(XD_RULEINFO,H1));
+      N2 := DI(XD_RULE_NBR, D(XD_RULEINFO,H2));
+      if N1 > N2 then
+	return R_UNION (L2, L1);
+      else -- since N1 < N2
+	T1 := TAIL(L1);
+	L := R_UNION(T1, L2);
+	if same (L, T1) then
+	  return L1;
+	else
+	  return INSERT (L, H1);
+	end if;
+      end if;
+    end if;
+  end R_UNION;
+
+  ----------------------------------------------------------------------
+
+end TERMLIST;

@@ -1,0 +1,3 @@
+with USERPK;
+with DIRECT_IO;
+package PAGEIO is new DIRECT_IO (ELEMENT_TYPE => USERPK.SECTOR);

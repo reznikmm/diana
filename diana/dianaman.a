@@ -1,0 +1,922 @@
+with PAGEMAN, TEXT2_IO, DIANATBL;
+use  PAGEMAN, TEXT2_IO, DIANATBL;
+with SEQUENTIAL_IO;
+with UNCHECKED_CONVERSION; pragma ELABORATE(UNCHECKED_CONVERSION);
+
+package body DIANAMAN is
+
+  package SEQ_IO is new SEQUENTIAL_IO (DIANA_TABLE_TYPE);
+
+  -- constants for NODE_NAME'POS (must match Diana package)
+  DN_ROOT:	  constant :=  0;
+  DN_TXTREP:	  constant :=  1;
+  DN_INT_VAL:	  constant :=  2;
+  DN_FALSE:	  constant :=  3;
+  DN_TRUE:	  constant :=  4;
+  DN_NIL:	  constant :=  5;
+  DN_LIST:	  constant :=  6;
+  DN_SOURCELINE:  constant :=  7;
+  DN_ERROR:	  constant :=  8;
+  DN_SYMBOL_REP:  constant :=  9;
+  DN_HASH:	  constant := 10;
+  DN_VOID:	  constant := 11;
+
+  LX_SRCPOS:	  INTEGER := -1;
+
+  SECTOR_MINUS_1: constant := SECTOR_SIZE - 1;
+  WORDS_IN_PNAME: constant INTEGER := (MAX_STRING + 4) / 4;
+  CONST_HASH:	  TREE;
+
+  RP:	       RPG_DES;     -- current real page
+  VP:	       VPG_DES;     -- current virt page
+  WVP:	       VPG_DES;     -- current virt page if changed
+
+  type HD_PN is
+    record
+      HD:  TREE;
+      PN:  PNAME;
+    end record;
+  type NAMEWORK is array (0 .. WORDS_IN_PNAME) of TREE;
+  type HWWORK is
+    record
+      LEFT:  SHORT;
+      RIGHT: SHORT;
+    end record;
+  type HWWORKAR is array (0 .. WORDS_IN_PNAME) of HWWORK;
+
+  --subtype DUMMY_TYPE is INTEGER range 0 .. 2;
+  --type CNV_TYPE (DUMMY: DUMMY_TYPE) is
+  --  record -- used for conversion, using Janus' failure to check discriminant
+  --	case DUMMY is
+  --	when 1 =>
+  --	  HD:  TREE;
+  --	  PN:  PNAME;
+  --	when 2 =>
+  --	  NW:  NAMEWORK;
+  --	when others =>
+  --	  HW:  HWWORKAR;
+  --	end case;
+  --  end record;
+
+  type ACCESS_HD_PN is access HD_PN;
+  type ACCESS_NAMEWORK is access NAMEWORK;
+  type ACCESS_HWWORKAR is access HWWORKAR;
+
+  function CAST is new UNCHECKED_CONVERSION(SOURCE => ACCESS_HD_PN,
+					    TARGET => ACCESS_NAMEWORK);
+  function CAST is new UNCHECKED_CONVERSION(SOURCE => ACCESS_HD_PN,
+					    TARGET => ACCESS_HWWORKAR);
+
+  CNVWORK_HD_PN: ACCESS_HD_PN := new HD_PN;
+  CNVWORK_NAMEWORK: ACCESS_NAMEWORK := CAST(CNVWORK_HD_PN);
+  CNVWORK_HWWORKAR: ACCESS_HWWORKAR := CAST(CNVWORK_HD_PN);
+  --pragma SHARED(CNVWORK_HD_PN);
+  --pragma SHARED(CNVWORK_NAMEWORK);
+  --pragma SHARED(CNVWORK_HWWORKAR);
+
+  CNV_HD: TREE		renames CNVWORK_HD_PN.HD;
+  CNV_PN: PNAME 	renames CNVWORK_HD_PN.PN;
+  CNV_NW: NAMEWORK	renames CNVWORK_NAMEWORK.all;
+  CNV_HW: HWWORKAR	renames CNVWORK_HWWORKAR.all;
+
+  function  INT_IMAGE_NOBLANK(V: INTEGER) return STRING;
+  procedure INIT_CONST;
+  procedure INIT_SPEC	(SPEC_FILE: STRING);
+  procedure WRITE_SPEC	(SPEC_FILE: STRING);
+  procedure READ_SPEC	(SPEC_FILE: STRING);
+  function  MAKE (C: INTEGER; LEN: POSITIVE; AR: AREA_DES) return TREE;
+  function  HASHSEARCH (PN: PNAME) return TREE;
+    -- returns SYMBOL_REP if found, else INT_VAL of hash code
+  function PRINTNAME(P: SHORT; L: BYTE) return STRING;
+
+  ----------------------------------------------------------------------
+
+  function NODE_REP (T: TREE) return STRING is
+    NODE_NAME_IMAGE: PNAME;
+  begin
+    if T = CONST_VIRGIN then
+      return "<???>";
+    else
+      if INTEGER(T.TTY) > LAST_NODE or T.TPG < 0 then
+	SET(NODE_NAME_IMAGE,
+            TO => '{' & INT_IMAGE_NOBLANK(INTEGER(T.TTY)) & '}');
+      else
+	SET(NODE_NAME_IMAGE,
+		 TO => PRINTNAME(SHORT(N_SPEC(INTEGER(T.TTY)).NS_NAME_PG),
+				 N_SPEC(INTEGER(T.TTY)).NS_NAME_LN));
+      end if;
+
+      if T.TPG = 0 and T.TLN = 0 then
+        return '<' & NODE_NAME_IMAGE & '>';
+      else
+        return '<' & NODE_NAME_IMAGE
+                   & '.' & INT_IMAGE_NOBLANK(INTEGER(T.TPG))
+                   & '.' & INT_IMAGE_NOBLANK(INTEGER(T.TLN)) & '>';
+      end if;
+    end if;
+  end NODE_REP;
+
+  procedure CREATE_IDL	(SPEC_FILE: STRING) is
+    ROOT:      TREE;
+    TR:        TREE;
+  begin
+    INIT_CONST;
+    CREATE_PAGE_MANAGER;
+    -- make initial stuff in work file
+    ROOT := MAKE(DN_ROOT,5,1);
+    DABS(1,ROOT,MAKE_TREE(1,DN_INT_VAL,0)); -- high page
+    -- 2 user_root not initialized
+    DABS(3,ROOT,CONST_NIL);		    -- source list
+    DABS(4,ROOT,MAKE_TREE(0,DN_INT_VAL,0)); -- error count
+    -- 5 filled in by WRITE_SPEC
+    -- make hash table (always in page 2)
+    TR := MAKE(DN_HASH,SECTOR_MINUS_1,2);
+    for I in 1 .. SECTOR_MINUS_1 loop
+      DABS(I, TR, CONST_NIL); -- empty hash bucket
+    end loop;
+    INIT_SPEC(SPEC_FILE);
+    PUT_LINE("DIANA specs read.");
+    WRITE_SPEC(SPEC_FILE);
+    PUT_LINE("DIANA tables written.");
+  end CREATE_IDL;
+
+  procedure OPEN_IDL(SPEC_FILE: STRING) is
+  begin
+    INIT_CONST;
+    OPEN_PAGE_MANAGER;
+    READ_SPEC(SPEC_FILE);
+
+    -- Determine ATTRIBUTE_NAME'POS(LX_SRCPOS) for ERROR's use
+    for I in 1 .. MAX_ATTR loop
+      --put(I,0);put(' ');put( attr_image(i));new_line;
+      if ATTR_IMAGE(I) = "lx_srcpos" then
+	LX_SRCPOS := I;
+        --PUT("lx_srcpos = ");PUT(I,0);NEW_LINE;
+	exit;
+      end if;
+    end loop;
+  end OPEN_IDL;
+
+  procedure CLOSE_DIANA is
+  begin
+    CLOSE_PAGE_MANAGER;
+  end CLOSE_DIANA;
+
+  function  MAKE     (C: in INTEGER)	    return TREE is
+  begin
+    if N_SPEC(C).NS_SIZE = 0 then
+      return MAKE_TREE(0,C,0);
+    else
+      return MAKE(C,N_SPEC(C).NS_SIZE,1);
+    end if;
+  end MAKE;
+
+  function  ARITY (T: in TREE)		    return ARITIES is
+  begin
+    return N_SPEC(INTEGER(T.TTY)).NS_ARITY;
+  end ARITY;
+
+  function  SON1 (T: in TREE)		    return TREE is
+  begin
+    if N_SPEC(INTEGER(T.TTY)).NS_ARITY in UNARY .. TERNARY then
+      return DABS(1, T);
+    else
+      QUIT("Cannot fetch SON1 of " & NODE_REP(T));
+    end if;
+  end SON1;
+
+  procedure SON1 (T: in TREE; V: in TREE) is
+  begin
+    if N_SPEC(INTEGER(T.TTY)).NS_ARITY in UNARY .. TERNARY then
+      DABS(1, T, V);
+    else
+      QUIT("Cannot store SON1 in " & NODE_REP(T));
+    end if;
+  end SON1;
+
+  function  SON2 (T: in TREE)		    return TREE is
+  begin
+    if N_SPEC(INTEGER(T.TTY)).NS_ARITY in BINARY .. TERNARY then
+      return DABS(2, T);
+    else
+      QUIT("Cannot fetch SON2 of " & NODE_REP(T));
+    end if;
+  end SON2;
+
+  procedure SON2 (T: in TREE; V: in TREE) is
+  begin
+    if N_SPEC(INTEGER(T.TTY)).NS_ARITY in BINARY .. TERNARY then
+      DABS(2, T, V);
+    else
+      QUIT("Cannot store SON2 in " & NODE_REP(T));
+    end if;
+  end SON2;
+
+  function  SON3 (T: in TREE)		    return TREE is
+  begin
+    if N_SPEC(INTEGER(T.TTY)).NS_ARITY = TERNARY then
+      return DABS(3, T);
+    else
+      QUIT("Cannot fetch SON3 of " & NODE_REP(T));
+    end if;
+  end SON3;
+
+  procedure SON3 (T: in TREE; V: in TREE) is
+  begin
+    if N_SPEC(INTEGER(T.TTY)).NS_ARITY = TERNARY then
+      DABS(3, T, V);
+    else
+      QUIT("Cannot store SON3 in " & NODE_REP(T));
+    end if;
+  end SON3;
+
+  function  HEAD	(L: in SEQ_TYPE)    return TREE is
+  begin
+    if L.H.TTY = BYTE(DN_LIST) then
+      return DABS(1, L.H);
+    elsif L.H /= CONST_NIL then
+      return L.H;
+    else
+      QUIT("Cannot fetch head of empty list.");
+    end if;
+  end HEAD;
+
+  function  TAIL	(L: in SEQ_TYPE)    return SEQ_TYPE is
+    T_SEQ:  SEQ_TYPE;
+  begin
+    if L.H.TTY = BYTE(DN_LIST) then
+      T_SEQ.H := DABS(2, L.H);
+      if T_SEQ.H.TTY = BYTE(DN_LIST) then
+	T_SEQ.T := L.T;
+      else
+	T_SEQ.T := CONST_NIL;
+      end if;
+    elsif L.H /= CONST_NIL then
+      T_SEQ.H := CONST_NIL;
+      T_SEQ.T := CONST_NIL;
+    else
+      QUIT("Cannot fetch tail of empty list.");
+    end if;
+    return T_SEQ;
+  end TAIL;
+
+  function  MAKE			    return SEQ_TYPE is
+    T_SEQ:  SEQ_TYPE;
+  begin
+    T_SEQ.H := CONST_NIL;
+    T_SEQ.T := CONST_NIL;
+    return T_SEQ;
+  end MAKE;
+
+  function  IS_EMPTY	(L: in SEQ_TYPE)    return BOOLEAN is
+  begin
+    return L.H = CONST_NIL;
+  end IS_EMPTY;
+
+  function  INSERT (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE is
+    T_SEQ:  SEQ_TYPE;
+  begin
+    if L.H = CONST_NIL then
+      T_SEQ.H  := T;
+      T_SEQ.T  := CONST_NIL;
+    else
+      T_SEQ.H  := MAKE(DN_LIST);
+      DABS(1,T_SEQ.H,T);
+      DABS(2,T_SEQ.H,L.H);
+      if L.T = CONST_NIL then
+	T_SEQ.T := T_SEQ.H;
+      else
+	T_SEQ.T := L.T;
+      end if;
+    end if;
+    return T_SEQ;
+  end INSERT;
+
+  function  APPEND (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE is
+    T_SEQ:  SEQ_TYPE;
+    T_TAIL: TREE;
+    T_END:  TREE;
+  begin
+    if L.H = CONST_NIL then
+      T_SEQ.H  := T;
+      T_SEQ.T  := CONST_NIL;
+    elsif L.H.TTY /= BYTE(DN_LIST) then
+      T_SEQ.H  := MAKE(DN_LIST);
+      DABS(1,T_SEQ.H,L.H);
+      DABS(2,T_SEQ.H,T);
+      T_SEQ.T := T_SEQ.H;
+    else
+      T_TAIL := L.T;
+      if T_TAIL = CONST_NIL then
+	T_TAIL := L.H;
+      end if;
+      loop
+	T_END := DABS(2,T_TAIL);
+	exit
+	  when T_END.TTY /= BYTE(DN_LIST);
+	T_TAIL := T_END;
+      end loop;
+      T_SEQ.H := L.H;
+      T_SEQ.T := MAKE(DN_LIST);
+      DABS(1,T_SEQ.T,T_END);
+      DABS(2,T_SEQ.T,T);
+      DABS(2,T_TAIL,T_SEQ.T);
+    end if;
+    return T_SEQ;
+  end APPEND;
+
+  function SINGLETON (V: TREE) return SEQ_TYPE is
+    S: SEQ_TYPE;
+  begin
+    S.H := V;
+    S.T := CONST_NIL;
+    return S;
+  end SINGLETON;
+
+  procedure POP (L: in out SEQ_TYPE; T: out TREE) is
+  begin
+    T := HEAD(L);
+    L := TAIL(L);
+  end POP;
+
+  procedure LIST	(T: in TREE; V: in SEQ_TYPE) is
+    A_SUB: INTEGER := N_SPEC(INTEGER(T.TTY)).NS_FIRST_A;
+  begin
+--@ PUT("L>");PUT(A_SUB);PUT(N_SPEC(INTEGER(T.TTY)).NS_FIRST_A);NEW_LINE;
+    for I in 1 .. N_SPEC(INTEGER(T.TTY)).NS_SIZE loop
+--@   PUT("--");PUT(I);PUT(A_SPEC(A_SUB).AS_ATNBR);NEW_LINE;
+      if A_SPEC(A_SUB).AS_ATNBR < 0 then
+	DABS(I,T,V.H);
+	return;
+      end if;
+      A_SUB := A_SUB + 1;
+    end loop;
+    QUIT("Cannot store a list in " & NODE_REP(T));
+  end LIST;
+
+  function  LIST	(T: in TREE)	    return SEQ_TYPE is
+    T_SEQ: SEQ_TYPE;
+    A_SUB: INTEGER := N_SPEC(INTEGER(T.TTY)).NS_FIRST_A;
+  begin
+    for I in 1 .. N_SPEC(INTEGER(T.TTY)).NS_SIZE loop
+      if A_SPEC(A_SUB).AS_ATNBR < 0 then
+	T_SEQ.H := DABS(I,T);
+	T_SEQ.T := CONST_NIL;
+	return T_SEQ;
+      end if;
+      A_SUB := A_SUB + 1;
+    end loop;
+    QUIT("Cannot fetch a list from " & NODE_REP(T));
+  end LIST;
+
+  procedure D(A: INTEGER; T: in TREE; V: in TREE) is
+    A_SUB: INTEGER := N_SPEC(INTEGER(T.TTY)).NS_FIRST_A;
+  begin
+    for I in 1 .. N_SPEC(INTEGER(T.TTY)).NS_SIZE loop
+      if A_SPEC(A_SUB).AS_ATNBR = A then
+	DABS(I,T,V);
+	return;
+      end if;
+      A_SUB := A_SUB + 1;
+    end loop;
+    QUIT("Cannot store " & ATTR_IMAGE(A) & " in " & NODE_REP(T));
+  end D;
+
+  function  D(A: INTEGER; T: in TREE) return TREE is
+    A_SUB: INTEGER := N_SPEC(INTEGER(T.TTY)).NS_FIRST_A;
+  begin
+    for I in 1 .. N_SPEC(INTEGER(T.TTY)).NS_SIZE loop
+      if A_SPEC(A_SUB).AS_ATNBR = A then
+	return DABS(I,T);
+      end if;
+      A_SUB := A_SUB + 1;
+    end loop;
+    QUIT("Cannot fetch " & ATTR_IMAGE(A) & " from " & NODE_REP(T));
+  end D;
+
+  procedure DB(A: INTEGER; T: in TREE; V: in BOOLEAN) is
+    TEMP: TREE := CONST_FALSE;
+  begin
+    if V then
+      TEMP := CONST_TRUE;
+    end if;
+    D(A,T,TEMP);
+  end DB;
+
+  function  DB(A: INTEGER; T: in TREE) return BOOLEAN is
+  begin
+    return D(A,T) = CONST_TRUE;
+  end DB;
+
+  procedure DI(A: INTEGER; T: in TREE; V: in INTEGER) is
+  begin
+    D(A,T,MAKE_TREE(V,DN_INT_VAL,0));
+  end DI;
+
+  function  DI(A: INTEGER; T: in TREE) return INTEGER is
+    TEMP: TREE;
+  begin
+    TEMP := D(A,T);
+    if TEMP.TTY = BYTE(DN_INT_VAL)
+    and then TEMP.TLN = 0 then
+      return INTEGER(TEMP.TPG);
+    else
+      QUIT("Value of " & ATTR_IMAGE(A) & " in " & NODE_REP(T)
+                      & " is not an integer");
+    end if;
+  end DI;
+
+  procedure DABS(A: INTEGER; T: in TREE; V: in TREE) is
+    TEMP:  INTEGER;
+  begin
+    if INTEGER(T.TPG) /= WVP then
+      VP := INTEGER(T.TPG);
+      RP := VPG(VP).RP;
+      if RP <= 0 then
+	RP := READ_PAGE (VP);
+      end if;
+      RPG(RP).CHANGED := TRUE;
+      WVP := VP;
+    end if;
+    TEMP := INTEGER(T.TLN) + A;
+    RPG(RP).DATA(TEMP) := V;
+  end DABS;
+
+  function  DABS(A: INTEGER; T: in TREE) return TREE is
+    TEMP : INTEGER;
+  begin
+    if INTEGER(T.TPG) not in VPG_NBR then  --- test
+      NEW_LINE;
+      PUT("DABS");PUT(A);PUT('/');PUT(INTEGER(T.TPG));PUT(INTEGER(T.TTY));
+      PUT(INTEGER(T.TLN));NEW_LINE;
+    end if;
+    if INTEGER(T.TPG) /= VP then
+      VP := INTEGER(T.TPG);
+      RP := INTEGER(VPG(VP).RP);
+      if RP <= 0 then
+	RP := READ_PAGE (VP);
+      end if;
+      WVP := 0;
+    end if;
+    TEMP := INTEGER(T.TLN) + A;
+    return RPG(RP).DATA(TEMP);
+  end DABS;
+
+  function  MAKE_TREE(TPG, TTY, TLN: INTEGER) return TREE is
+    TEMP: TREE;
+  begin
+    TEMP.TPG := SHORT(TPG);
+    TEMP.TTY := BYTE(TTY);
+    TEMP.TLN := BYTE(TLN);
+    return TEMP;
+  end MAKE_TREE;
+
+  function NODE_IMAGE(N: INTEGER) return STRING is
+    N_SPEC_N: N_SPEC_DATA renames N_SPEC(N);
+  begin
+    return PRINTNAME(SHORT(N_SPEC_N.NS_NAME_PG), N_SPEC_N.NS_NAME_LN);
+  end NODE_IMAGE;
+
+  function ATTR_IMAGE(N: INTEGER) return STRING is
+    AN_SPEC_N: A_NAME_DATA renames AN_SPEC(N);
+  begin
+    return PRINTNAME(SHORT(AN_SPEC_N.AN_NAME_PG), AN_SPEC_N.AN_NAME_LN);
+  end ATTR_IMAGE;
+
+  function PRINTNAME(T: TREE) return STRING is -- txtrep or symbol_rep
+    TR:   TREE := T;
+  begin
+    if TR.TTY = BYTE(DN_SYMBOL_REP) then
+      TR := DABS(1,TR); -- get the corresponding txtrep
+    end if;
+    if TR.TTY /= BYTE(DN_TXTREP) then
+      return ("???");
+    end if;
+    CNV_HD := DABS(0,TR); -- get the heading; make pg active
+    declare
+      SUB : INTEGER := INTEGER(TR.TLN);
+      RPG_RP:  RPG_DATA renames RPG(RP);
+    begin
+      for I in 1 .. INTEGER(CNV_HD.TLN)loop
+	SUB := SUB + 1;
+	CNV_NW(I) := RPG_RP.DATA(SUB);
+      end loop;
+    end;
+    --return TO_STRING(CNV_PN);
+    declare
+        temp: string (1 .. LENGTH(CNV_PN));
+    begin
+	temp := to_string(cnv_pn);
+        return temp;
+    end;
+  end PRINTNAME;
+
+  function PRINTNAME(P: SHORT; L: BYTE) return STRING is
+  begin
+    return PRINTNAME(MAKE_TREE(INTEGER(P),
+			       DN_TXTREP,INTEGER(L)));
+
+  end PRINTNAME;
+
+  function STORETEXT(V: PNAME) return TREE is -- stores a txtrep
+    TR: TREE;
+    TLN: INTEGER;
+    SUB: INTEGER;
+  begin
+    SUB := (LENGTH(V)+4)/4; -- nbr data words in SYMBOL-REP
+    CNV_NW(SUB) := CONST_BINARY_ZERO; -- fill last word with nulls
+    SET(CNV_PN, TO => V);
+    CNV_HD := MAKE_TREE(DN_TXTREP,0,SUB); -- ?? was LENGTH(V) ??
+
+    TR := MAKE (DN_TXTREP,SUB,9);
+    TLN := INTEGER(TR.TLN);
+    declare
+      RPG_RP:  RPG_DATA renames RPG(RP);
+    begin
+      for I in 1 .. SUB loop
+	TLN := TLN + 1;
+	RPG(RP).DATA(TLN) := CNV_NW(I);
+      end loop;
+    end;
+    return TR;
+  end STORETEXT;
+
+  function STORETEXT(V: STRING) return TREE is
+    PN: PNAME;
+  begin
+    SET(PN, TO => V);
+    return(STORETEXT(PN));
+  end STORETEXT;
+
+  function STORESYM (V: PNAME) return TREE is -- adds to sym tbl
+    TR: TREE := HASHSEARCH(V);
+    SYMR: TREE;
+    T_SEQ:  SEQ_TYPE;
+  begin
+
+    if TR.TTY /= BYTE(DN_INT_VAL) then
+      return TR;
+    else
+      -- make symbol_rep
+      SYMR := MAKE(DN_SYMBOL_REP, N_SPEC(DN_SYMBOL_REP).NS_SIZE, 8);
+      DABS(1,SYMR,STORETEXT(V));
+      DABS(2,SYMR,CONST_NIL);
+      -- add to hash list
+      T_SEQ.H := DABS(INTEGER(TR.TPG), CONST_HASH);
+      T_SEQ.T := CONST_NIL;
+      T_SEQ := INSERT(T_SEQ,SYMR);
+      DABS(INTEGER(TR.TPG), CONST_HASH, T_SEQ.H);
+      return SYMR;
+    end if;
+  end STORESYM;
+
+  function STORESYM(V: STRING) return TREE is
+    PN: PNAME;
+  begin
+    SET(PN, TO => V);
+    return(STORESYM(PN));
+  end STORESYM;
+
+  function FINDSYM  (V: PNAME) return TREE is -- void if not there
+    TR: TREE :=HASHSEARCH(V);
+  begin
+    if TR.TTY = BYTE(DN_INT_VAL) then
+      TR := CONST_VOID;
+    elsif TR.TTY /= BYTE(DN_SYMBOL_REP) then
+      QUIT("Bad result from HASHSEARCH - " & NODE_REP(TR));
+    end if;
+    return TR;
+  end FINDSYM;
+
+  function FINDSYM(V: STRING) return TREE is
+    PN: PNAME;
+  begin
+    SET(PN, TO => V);
+    return(FINDSYM(PN));
+  end FINDSYM;
+
+  function MAKE_SOURCE_POSITION (T: TREE; COL: NATURAL) return TREE is
+  begin
+    if T.TTY /= DN_SOURCELINE then
+      QUIT("MAKE_SOURCE_POSITION: Bad source line - " & NODE_REP(T));
+    end if;
+    return MAKE_TREE(-INTEGER(T.TPG),COL,INTEGER(T.TLN));
+  end MAKE_SOURCE_POSITION;
+
+  function GET_SOURCE_LINE (T:TREE) return TREE is
+  begin
+    if T.TPG >= 0 then
+      QUIT("GET_SOURCE_LINE: Bad source position - " & NODE_REP(T));
+    end if;
+    return MAKE_TREE(-INTEGER(T.TPG),DN_SOURCELINE,INTEGER(T.TLN));
+  end GET_SOURCE_LINE;
+
+  function GET_SOURCE_COL (T:TREE) return NATURAL is
+  begin
+    return INTEGER(T.TTY);
+  end GET_SOURCE_COL;
+
+  procedure EMIT_ERROR (SP_ARG: TREE; MSG: STRING) is
+    SP:     TREE := SP_ARG;
+    SRCLIN: TREE;
+    ERRNOD: TREE := MAKE(DN_ERROR);
+
+  begin
+    -- If this is a struct node, get lx_srcpos attribute
+    if SP.TPG > 0 and SP.TLN /= ZERO_BYTE then
+      SP := D(LX_SRCPOS, SP);
+    end if;
+
+    if SP = CONST_VIRGIN or SP.TLN = ZERO_BYTE or SP.TPG = 0 then
+      PUT("???: ");PUT_LINE(MSG);
+      QUIT("BAD SOURCE POSITION IN ERROR - " & NODE_REP(SP_ARG));
+    end if;
+
+    DABS(1, ERRNOD, SP);
+    DABS(2, ERRNOD, STORETEXT(MSG));
+    SRCLIN := GET_SOURCE_LINE(SP);
+    LIST(SRCLIN, (APPEND(LIST(SRCLIN), ERRNOD)));
+
+    -- display error now
+    PUT(INTEGER(DABS(1,SRCLIN).TPG),1);PUT(": ");PUT_LINE(MSG);
+  end EMIT_ERROR;
+
+  procedure ERROR (SP: TREE; MSG: STRING) is
+    ERRCNT: TREE;
+  begin
+    if PRAGMA_CONTEXT /= CONST_VOID then
+
+	--D(SM_DEFN, PRAGMA_CONTEXT, CONST_VOID);
+	-- $$$$ SM_DEFN not known here ; maybe error should be elsewhere
+	-- $$$$ depend on fact that sm_defn is third attr of used_object_id
+	DABS(3, PRAGMA_CONTEXT, CONST_VOID);
+	WARNING(SP, MSG);
+
+    else
+
+	EMIT_ERROR(SP,MSG);
+
+	-- count the error
+	ERRCNT := DABS(4, CONST_ROOT);
+	ERRCNT.TPG := ERRCNT.TPG + 1;
+	DABS(4, CONST_ROOT, ERRCNT);
+    end if;
+
+  end ERROR;
+
+  procedure WARNING (SP: TREE; MSG: STRING) is
+  begin
+    EMIT_ERROR(SP,"(W) " & MSG);
+  end WARNING;
+
+  function  MAKE     (C: INTEGER; L: INTEGER) return TREE is
+  begin
+    return MAKE(C, L, 1);
+  end MAKE;
+
+  procedure NEW_BLOCK is
+  begin
+    AREA(1).NLN := SECTOR_SIZE;
+    AREA(1).SAVE_NLN := SECTOR_SIZE;
+  end NEW_BLOCK;
+
+  function LAST_BLOCK return INTEGER is
+  begin
+    return HIGH_VPG;
+  end LAST_BLOCK;
+
+  ----------------------------------------------------------------------
+
+  function  INT_IMAGE_NOBLANK(V: INTEGER) return STRING is
+    TEMP: PNAME;
+  begin
+    if V >= 0 then
+      SET(TEMP, TO => INTEGER'IMAGE(V));
+      return TO_STRING(TEMP)(2 .. LENGTH(TEMP));
+    else
+      return INTEGER'IMAGE(V);
+    end if;
+  end INT_IMAGE_NOBLANK;
+
+  procedure INIT_CONST is
+  begin
+    if CONST_NIL = MAKE_TREE(0,DN_NIL,0)
+    and CONST_VOID = MAKE_TREE(0,DN_VOID,0)
+    and CONST_TRUE = MAKE_TREE(0,DN_TRUE,0)
+    and CONST_FALSE = MAKE_TREE(0,DN_FALSE,0)
+    and CONST_ROOT = MAKE_TREE(1,0,1)
+    and CONST_VIRGIN = MAKE_TREE(-1,255,255)
+    and CONST_BINARY_ZERO = MAKE_TREE(0,0,0)
+    and ZERO_BYTE = BYTE(0) then
+	null;
+    else
+        QUIT("Dianaman: Bad constant");
+    end if;
+    CONST_HASH := MAKE_TREE(2,DN_HASH,1);
+  end INIT_CONST;
+
+  procedure INIT_SPEC	(SPEC_FILE: STRING) is
+    use ASCII;
+
+    SFILE:	FILE_TYPE;
+    T_CHR:	CHARACTER;
+    T_INT:	INTEGER;
+    T_TXT:	STRING(1..50);
+    T_LAST:	NATURAL;
+    II: 	INTEGER;
+    TXT:	TREE;
+    AS_SEEN:	BOOLEAN;
+    AS_LIST_SEEN: BOOLEAN;
+    NON_AS_SEEN: BOOLEAN;
+    NODE_TXT:	PNAME;
+  begin
+    OPEN(SFILE,IN_FILE,SPEC_FILE & ".TBL");
+    LAST_NODE := -1;
+    LAST_ATTR := -1;
+    LAST_NODE_ATTR := 0;
+    while not END_OF_FILE(SFILE) loop
+      GET(SFILE,T_CHR); -- 'N' or 'A'
+      if T_CHR /= 'C' and T_CHR /= 'E' then -- no integer for classes
+	GET(SFILE,T_INT); -- Node or attr seq; negative for Seq attrs
+      end if;
+      GET_LINE(SFILE,T_TXT,T_LAST);
+      II := 0;
+      for I in 1 .. T_LAST loop
+        if T_TXT(I) /= ' ' and T_TXT(I) /= HT then
+	  II := II + 1;
+	  T_TXT (II) := T_TXT (I);
+	end if;
+      end loop;
+      T_LAST := II;
+      if T_CHR = 'N' then
+	LAST_NODE := LAST_NODE + 1;
+	if LAST_NODE /= T_INT then
+          QUIT("INIT_SPEC: LAST NODE /= T_INT");
+	end if;
+	N_SPEC(LAST_NODE).NS_SIZE := 0;
+	N_SPEC(LAST_NODE).NS_FIRST_A := 0;
+	TXT := STORETEXT(T_TXT(1 .. T_LAST));
+	N_SPEC(LAST_NODE).NS_NAME_PG := BYTE(TXT.TPG);
+	N_SPEC(LAST_NODE).NS_NAME_LN := TXT.TLN;
+	N_SPEC(LAST_NODE).NS_ARITY := NULLARY;
+	AS_LIST_SEEN := FALSE;
+	AS_SEEN := FALSE;
+	NON_AS_SEEN := FALSE;
+	SET(NODE_TXT, TO => T_TXT(1 .. T_LAST));
+      elsif T_CHR = 'A' or T_CHR = 'B' or T_CHR = 'I' then
+	LAST_NODE_ATTR := LAST_NODE_ATTR + 1;
+	if N_SPEC(LAST_NODE).NS_FIRST_A = 0 then
+	  N_SPEC(LAST_NODE).NS_FIRST_A := LAST_NODE_ATTR;
+	end if;
+	N_SPEC(LAST_NODE).NS_SIZE := N_SPEC(LAST_NODE).NS_SIZE + 1;
+	A_SPEC(LAST_NODE_ATTR).AS_ATNBR := T_INT;
+        if T_LAST >= 3 and then T_TXT(1 .. 3) = "as_" then
+	  if T_INT < 0 then
+	    if AS_SEEN or NON_AS_SEEN then
+              PUT("Bad as_list: ");PUT_LINE(NODE_TXT);
+	    end if;
+	    AS_SEEN := TRUE;
+	    AS_LIST_SEEN := TRUE;
+            N_SPEC(LAST_NODE).NS_ARITY := ARITIES'VAL(
+                    ARITIES'POS(N_SPEC(LAST_NODE).NS_ARITY)+4);
+	  else
+	    if AS_LIST_SEEN or NON_AS_SEEN then
+              PUT("Bad as_...: ");PUT_LINE(NODE_TXT);
+	    end if;
+	    AS_SEEN := TRUE;
+            N_SPEC(LAST_NODE).NS_ARITY := ARITIES'VAL(
+                    ARITIES'POS(N_SPEC(LAST_NODE).NS_ARITY)+1);
+	  end if;
+	else
+	  NON_AS_SEEN := TRUE;
+	end if;
+	T_INT := abs T_INT;
+	if T_INT > LAST_ATTR then
+	  LAST_ATTR := T_INT;
+	end if;
+	TXT := STORETEXT(T_TXT(1 .. T_LAST));
+	AN_SPEC(T_INT).AN_NAME_PG := BYTE(TXT.TPG);
+	AN_SPEC(T_INT).AN_NAME_LN := TXT.TLN;
+      end if;
+    end loop;
+    CLOSE(SFILE);
+    if FALSE then -- debug code
+      for I in 0 .. LAST_NODE loop
+        PUT(I);PUT(' ');PUT_LINE(NODE_IMAGE(I));
+	for J in N_SPEC(I).NS_FIRST_A
+	       .. N_SPEC(I).NS_FIRST_A + N_SPEC(I).NS_SIZE - 1 loop
+          PUT('-');PUT(J);PUT(A_SPEC(J).AS_ATNBR);PUT(' ');
+	  PUT_LINE(ATTR_IMAGE(abs A_SPEC(J).AS_ATNBR));
+	end loop;
+      end loop;
+      PUT_LINE("$$$$$$$$$$");
+    end if;
+  end INIT_SPEC;
+
+  procedure WRITE_SPEC(SPEC_FILE: STRING) is
+    SFILE: SEQ_IO.FILE_TYPE;
+  begin
+    SEQ_IO.CREATE(SFILE, SEQ_IO.OUT_FILE, SPEC_FILE & ".BIN");
+    SEQ_IO.WRITE(SFILE,DIANA_TABLE_AREA);
+    SEQ_IO.CLOSE(SFILE);
+  end WRITE_SPEC;
+
+  procedure READ_SPEC(SPEC_FILE: STRING) is
+    SFILE: SEQ_IO.FILE_TYPE;
+  begin
+    SEQ_IO.OPEN(SFILE, SEQ_IO.IN_FILE, SPEC_FILE & ".BIN");
+    SEQ_IO.READ(SFILE,DIANA_TABLE_AREA);
+    SEQ_IO.CLOSE(SFILE);
+    if FALSE then -- debug code
+      for I in 0 .. LAST_NODE loop
+        PUT(I);PUT(' ');PUT_LINE(NODE_IMAGE(I));
+	for J in N_SPEC(I).NS_FIRST_A
+	       .. N_SPEC(I).NS_FIRST_A + N_SPEC(I).NS_SIZE - 1 loop
+          PUT('-');PUT(J);PUT(A_SPEC(J).AS_ATNBR);PUT(' ');
+	  PUT_LINE(ATTR_IMAGE(abs A_SPEC(J).AS_ATNBR));
+	end loop;
+      end loop;
+      PUT_LINE("$$$$$$$$$$");
+    end if;
+  end READ_SPEC;
+
+  function  MAKE (C: INTEGER; LEN: POSITIVE; AR: AREA_DES) return TREE is
+    TEMP: TREE;
+    T_LN: INTEGER;
+  begin
+    T_LN := AREA(AR).NLN;
+    if T_LN + LEN >= SECTOR_SIZE then
+      ALLOC_PAGE(AR, LEN+1);
+      T_LN := AREA(AR).NLN;
+    end if;
+    VP := AREA(AR).NVP;
+    WVP := VP;
+    RP := VPG(VP).RP;
+    T_LN := T_LN + 1;
+    TEMP.TPG := SHORT(AREA(AR).NVP);
+    TEMP.TTY := BYTE(C);
+    TEMP.TLN := BYTE(T_LN);
+    AREA(AR).NLN := T_LN + LEN;
+    RPG(RP).DATA(T_LN) := MAKE_TREE(C,0,LEN);
+    return TEMP;
+  end MAKE;
+
+  function  HASHSEARCH (PN: PNAME) return TREE is
+    -- returns either DN_SYMBOL_REP or INT_VAL (hash code) ...
+    HASH_SUM:	INTEGER := 0;
+    HASH_LIST : SEQ_TYPE;
+    SYM_T:	TREE;
+    TXT_T:	TREE;
+    IS_MATCH:	BOOLEAN;
+    SUB:	INTEGER;
+
+  begin
+    SUB := (LENGTH(PN)+4)/4;
+    CNV_NW(SUB) := CONST_BINARY_ZERO; -- fill last word with nulls
+    SET(CNV_PN, TO => PN);
+    CNV_HD := MAKE_TREE(DN_TXTREP,0,SUB);
+
+    for I in 1 .. SUB loop
+      declare
+	CNV_HW_I: HWWORK renames CNV_HW(I);
+      begin
+	HASH_SUM := abs (abs (HASH_SUM - INTEGER(CNV_HW_I.LEFT))
+			 - INTEGER(CNV_HW_I.RIGHT));
+      end;
+    end loop;
+
+    HASH_SUM := (HASH_SUM mod SECTOR_MINUS_1) + 1; -- this is the hash code
+
+    HASH_LIST.H := DABS(HASH_SUM, CONST_HASH);
+    HASH_LIST.T := CONST_NIL;
+--@ PUT(HASH_SUM);PUT(' ');PTREE(HASH_LIST.H);PUT_LINE(PN);
+    while HASH_LIST.H /= CONST_NIL loop
+      SYM_T := HEAD(HASH_LIST);
+      TXT_T := DABS(1,SYM_T);
+--@   PTREE(SYM_T);PTREE(TXT_T);PUT_LINE(PRINTNAME(TXT_T);
+      if CNV_HD = DABS(0,TXT_T) then
+	IS_MATCH := TRUE;
+	SUB := INTEGER(TXT_T.TLN);
+	declare
+	  RPG_RP:  RPG_DATA renames RPG(RP);
+	begin
+	  for I in 1 .. INTEGER(CNV_HD.TLN) loop
+	    SUB := SUB + 1;
+	    if CNV_NW(I) /= RPG_RP.DATA(SUB) then
+	      IS_MATCH := FALSE;
+	      exit;
+	    end if;
+	  end loop;
+	end;
+	if IS_MATCH then
+--@       PUT("Found--");PTREE(SYM_T);NEW_LINE;
+	  return SYM_T;
+	end if;
+      end if;
+      HASH_LIST := TAIL (HASH_LIST);
+    end loop;
+--@ PUT("Not found--");PINT(HASH_SUM);NEW_LINE;
+    return MAKE_TREE(HASH_SUM,DN_INT_VAL,0);
+  end HASHSEARCH;
+
+end DIANAMAN;

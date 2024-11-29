@@ -1,0 +1,18 @@
+with USERPK, LTYPE; use USERPK, LTYPE;
+package LSCAN is
+
+  type LINE is
+    record
+      LEN: INTEGER;
+      BDY: STRING(1 .. MAX_STRING);
+    end record;
+
+  procedure LEX_INIT;
+
+  procedure LEX_SCAN(SOURCE_LINE: LINE;
+	COL:	   in out NATURAL;
+	F_COL:	   out NATURAL;
+	TTYPE_OUT: out LEXTYPE;
+	TEXT_OUT:  in out PNAME);
+
+end LSCAN;

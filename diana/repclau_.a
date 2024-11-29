@@ -1,0 +1,21 @@
+with USERPK; use USERPK;
+with SEMGLOB; use SEMGLOB;
+
+package REPCLAU is
+
+    procedure RESOLVE_LENGTH_REP(ATTRIBUTE: TREE; EXP: in out TREE; H: H_TYPE);
+
+    procedure RESOLVE_ENUM_REP(SIMPLE_NAME: in out TREE; EXP: TREE; H: H_TYPE);
+
+    procedure RESOLVE_ADDRESS_REP
+		( SIMPLE_NAME: in out TREE
+		; EXP: in out TREE
+		; H: H_TYPE );
+
+    procedure RESOLVE_RECORD_REP
+		( SIMPLE_NAME:	in out TREE
+		; ALIGNMENT:	TREE
+		; COMP_REP_S:	TREE
+		; H:		H_TYPE );
+
+end REPCLAU;

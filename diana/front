@@ -1,0 +1,46 @@
+rm -f *.TMP
+if test ! -s $1
+then
+  echo "**** NO SUCH FILE ****"
+  exit 
+fi
+ln $1 \$\$\$PGM.TMP
+cp PARSE.VM "\$\$\$.TMP"
+chmod 644 "\$\$\$.TMP"
+keepgoing=0
+if exe/parphase
+then keepgoing=0
+else keepgoing=1
+fi
+if test $keepgoing -eq 0
+then
+  if exe/libphase
+  then keepgoing=0
+  else keepgoing=1
+  fi
+fi
+if test $keepgoing -eq 0
+then
+  cp \$\$\$.TMP SEMPHASE.TMP
+  if exe/semphase
+  then keepgoing=0
+  else keepgoing=1
+  fi
+fi
+if test -s \$\$\$.TMP
+then
+  if exe/errphase
+  then keepgoing=$keepgoing
+  else keepgoing=1
+  fi
+fi
+if test $keepgoing -eq 0
+then
+  cp \$\$\$.TMP WRITELIB.TMP
+  mv ADA__LIB.TMP ADA__LIB.CTL
+  if exe/writelib
+  then keepgoing=0
+  else keepgoing=1
+  fi
+  mv WRITELIB.TMP \$\$\$.TMP
+fi

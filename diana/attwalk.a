@@ -1,0 +1,1301 @@
+with TEXT2_IO; use TEXT2_IO;-- for debug
+with PRINTNOD; -- for debug
+with DIANA,DIANAMAN,DIANATTR; use DIANA,DIANATTR,DIANAMAN;
+with REQUTIL; use REQUTIL;
+with VISUTIL; use VISUTIL;
+with DEFUTIL; use DEFUTIL;
+with SETUTIL; use SETUTIL;
+with UARITH; use UARITH;
+with PRENAME; use PRENAME;
+with EXPTYPE, EXPRESO; use EXPTYPE, EXPRESO;
+with MAKENOD; use MAKENOD;
+with SEMGLOB; use SEMGLOB;
+with REDSUBP; use REDSUBP;
+with CHKSTAT; use CHKSTAT;
+
+package body ATTWALK is
+
+    procedure WALK_ATTRIBUTE_PREFIX
+                ( PREFIX:       in out TREE
+                ; PREFIX_ID:    out TREE
+                ; PREFIX_TYPE:  out TREE
+                ; ATTRIBUTE_ID: TREE );
+
+    procedure CHECK_PREFIX_AND_ATTRIBUTE
+                ( ATTRIBUTE_NODE        : TREE
+                ; PREFIX_ID             : TREE
+                ; PREFIX_TYPE           : TREE
+                ; ATTRIBUTE_SUBTYPE     : out TREE
+                ; ATTRIBUTE_VALUE       : out TREE
+                ; PARAMETER             : in out TREE
+                ; PARAM_TYPESET         : in out TYPESET_TYPE
+                ; IS_FUNCTION:            BOOLEAN );
+
+
+    -- $$$$ for debug
+    procedure PRINT_TREE(T: TREE) is
+    begin
+        if KIND(T) = DN_REAL_VAL then
+            PRINTNOD.PRINT_TREE(D(XD_NUMER,T));
+            PUT('/');
+            PRINTNOD.PRINT_TREE(D(XD_DENOM,T));
+        else
+            PRINTNOD.PRINT_TREE(T);
+        end if;
+    end PRINT_TREE;
+
+
+    -- $$$$ extensions to uarith
+    function U_REAL(NUMER: INTEGER; DENOM: INTEGER := 1) return TREE is
+        REAL: TREE := MAKE(DN_REAL_VAL);
+    begin
+        D(XD_NUMER, REAL, U_VAL(NUMER));
+        D(XD_DENOM, REAL, U_VAL(1));
+        REAL := REAL / U_VAL(DENOM);
+        return REAL;
+    end U_REAL;
+
+    -- $$$$ extensions to uarith
+    function "<" (L,R: TREE) return BOOLEAN is
+    begin
+        return not (L >= R);
+    end "<";
+
+    function ">" (L,R: TREE) return BOOLEAN is
+    begin
+        return not (L <= R);
+    end ">";
+
+    -- $$$$ should not be here
+    function GET_SUBSTRUCT(TYPE_SPEC: TREE) return TREE is
+    begin
+        if KIND(TYPE_SPEC) in CLASS_PRIVATE_SPEC
+        and then KIND(GET_BASE_STRUCT(TYPE_SPEC)) in CLASS_FULL_TYPE_SPEC then
+            return D(SM_TYPE_SPEC, TYPE_SPEC);
+        elsif KIND(TYPE_SPEC) = DN_INCOMPLETE
+        and then KIND(GET_BASE_STRUCT(TYPE_SPEC)) in CLASS_FULL_TYPE_SPEC then
+            return D(XD_FULL_TYPE_SPEC, TYPE_SPEC);
+        else
+            return TYPE_SPEC;
+        end if;
+    end GET_SUBSTRUCT;
+
+
+    -- $$$$ should not be here
+    function GET_APPROPRIATE_BASE(TYPE_SPEC: TREE) return TREE is
+        BASE_TYPE: TREE := GET_BASE_TYPE(TYPE_SPEC);
+    begin
+        if KIND(BASE_TYPE) = DN_ACCESS then
+            return GET_BASE_TYPE(D(SM_DESIG_TYPE,BASE_TYPE));
+        else
+            return BASE_TYPE;
+        end if;
+    end GET_APPROPRIATE_BASE;
+
+
+    function BITS_IN_INTEGER_PART(REAL: TREE) return NATURAL is
+        TEMP: TREE := REAL;
+        RESULT: INTEGER := 0;
+    begin
+        while TEMP > U_REAL(2**14) loop
+            TEMP := TEMP / U_VAL(2**14);
+            RESULT := RESULT + 14;
+        end loop;
+        while TEMP > U_REAL(1) loop
+            TEMP := TEMP / U_VAL(2);
+            RESULT := RESULT + 1;
+        end loop;
+        if USERPK.DEBUG then
+            PUT("Bits_In_Integer_Part(");PRINT_TREE(REAL);PUT(") = ");
+            PUT(INTEGER'IMAGE(RESULT)); NEW_LINE;
+        end if;
+        return RESULT;
+    end BITS_IN_INTEGER_PART;
+
+
+    function DIGITS_IN_INTEGER_PART(REAL: TREE) return NATURAL is
+        TEMP: TREE := REAL;
+        RESULT: INTEGER := 0;
+    begin
+        while TEMP > U_REAL(10**4) loop
+            TEMP := TEMP / U_VAL(10**4);
+            RESULT := RESULT + 4;
+        end loop;
+        while TEMP > U_REAL(1) loop
+            TEMP := TEMP / U_VAL(10);
+            RESULT := RESULT + 1;
+        end loop;
+        if USERPK.DEBUG then
+            PUT("Digits_In_Integer_Part(");PRINT_TREE(REAL);PUT(") = ");
+            PUT(INTEGER'IMAGE(RESULT)); NEW_LINE;
+        end if;
+        return RESULT;
+    end DIGITS_IN_INTEGER_PART;
+
+
+    function GET_FLOAT_MANTISSA(CONSTRAINT: TREE) return TREE is
+        RESULT: TREE;
+    begin
+        RESULT := U_VAL(BITS_IN_INTEGER_PART
+                ( U_REAL(10) ** D(SM_ACCURACY,CONSTRAINT) ) + 1 );
+        if USERPK.DEBUG then
+            PUT("Get_Float_Mantissa(");
+            PUT(INTEGER'IMAGE(DI(SM_ACCURACY,CONSTRAINT)));PUT(") = ");
+            PRINT_TREE(RESULT); NEW_LINE;
+        end if;
+        return RESULT;
+    end GET_FLOAT_MANTISSA;
+
+
+    function GET_FIXED_SMALL(CONSTRAINT: TREE) return TREE is
+        SMALL: TREE := D(CD_IMPL_SMALL, CONSTRAINT);
+    begin
+        if SMALL = CONST_VOID then
+            SMALL := D(SM_ACCURACY, CONSTRAINT);
+        end if;
+        if USERPK.DEBUG then
+            PUT("Get_Fixed_Small(...) = ");
+            PRINT_TREE(SMALL); NEW_LINE;
+        end if;
+        return SMALL;
+    end GET_FIXED_SMALL;
+
+
+    function GET_FIXED_BOUND(CONSTRAINT: TREE) return TREE is
+        SMALL: constant TREE := GET_FIXED_SMALL(CONSTRAINT);
+        BOUND: TREE := GET_STATIC_VALUE(D(AS_EXP2,D(SM_RANGE,CONSTRAINT)));
+        LOW_BOUND: TREE := GET_STATIC_VALUE(D(AS_EXP1,D(SM_RANGE,CONSTRAINT)));
+        REAL_ZERO: constant TREE := U_REAL(0);
+    begin
+        if BOUND < U_REAL(0) then
+            BOUND := - BOUND;
+        end if;
+        if LOW_BOUND < U_REAL(0) then
+            LOW_BOUND := - LOW_BOUND;
+        end if;
+        if LOW_BOUND > BOUND then
+            BOUND := LOW_BOUND;
+        end if;
+        if BOUND > SMALL then
+            BOUND := BOUND - SMALL;
+        end if;
+        if USERPK.DEBUG then
+            PUT("Get_Fixed_Bound(...) = ");
+            PRINT_TREE(BOUND); NEW_LINE;
+        end if;
+        return BOUND;
+    end GET_FIXED_BOUND;
+
+
+    function GET_FIXED_MANTISSA(CONSTRAINT: TREE) return TREE is
+        RESULT: TREE;
+    begin
+        RESULT := U_VAL(BITS_IN_INTEGER_PART
+                ( GET_FIXED_BOUND(CONSTRAINT)
+                  / GET_FIXED_SMALL(CONSTRAINT) ));
+        if USERPK.DEBUG then
+            PUT("Get_Fixed_Mantissa(...) = ");
+            PRINT_TREE(RESULT); NEW_LINE;
+        end if;
+        return RESULT;
+    end GET_FIXED_MANTISSA;
+
+
+    function GET_WIDTH(TYPE_SPEC: TREE) return INTEGER is
+        RANGE_NODE: TREE := D(SM_RANGE, TYPE_SPEC);
+        L_BOUND: TREE := D(AS_EXP1, RANGE_NODE);
+        U_BOUND: TREE := D(AS_EXP2, RANGE_NODE);
+        L_VALUE: TREE;
+        U_VALUE: TREE;
+        COUNT: INTEGER := 0;
+        ESIZE: INTEGER;
+        ENUM_LIST: SEQ_TYPE;
+        ENUM: TREE;
+        BOUND: TREE;
+        function SLENGTH(A: STRING) return INTEGER is
+            -- A is text of enumeration literal; returns width
+        begin
+            if A(1) = '_' then
+                return A'LENGTH - 1;
+            else
+                return A'LENGTH;
+            end if;
+        end SLENGTH;
+    begin
+        L_VALUE := GET_STATIC_VALUE(L_BOUND);
+        U_VALUE := GET_STATIC_VALUE(U_BOUND);
+        if KIND(TYPE_SPEC) = DN_ENUMERATION then
+            ENUM_LIST := LIST(D(SM_LITERAL_S, TYPE_SPEC));
+            while not IS_EMPTY(ENUM_LIST) loop
+                exit
+                    when D(SM_POS,HEAD(ENUM_LIST)) = L_VALUE;
+                ENUM_LIST := TAIL(ENUM_LIST);
+            end loop;
+            while not IS_EMPTY(ENUM_LIST) loop
+                POP(ENUM_LIST, ENUM);
+                ESIZE := SLENGTH(PRINTNAME(D(LX_SYMREP,ENUM)));
+                if ESIZE > COUNT then
+                    COUNT := ESIZE;
+                end if;
+                exit
+                    when D(SM_POS,ENUM) = U_VALUE;
+            end loop;
+            return COUNT;
+        else -- integer
+            if L_VALUE < U_VAL(0) then
+                L_VALUE := - L_VALUE;
+            end if;
+            if U_VALUE < U_VAL(0) then
+                U_VALUE := - U_VALUE;
+            end if;
+            if L_VALUE > U_VALUE then
+                U_VALUE := L_VALUE;
+            end if;
+            while U_VALUE >= U_VAL(10) loop
+                COUNT := COUNT + 1;
+                U_VALUE := U_VALUE / U_VAL(10);
+            end loop;
+            return COUNT+2;
+        end if;
+    end GET_WIDTH;
+
+
+    procedure EVAL_ATTRIBUTE
+                ( EXP:          TREE
+                ; TYPESET:      out TYPESET_TYPE
+                ; IS_SUBTYPE:   out BOOLEAN
+                ; IS_FUNCTION:  BOOLEAN := FALSE )
+    is
+        ATTRIBUTE_NODE: TREE := EXP;
+        PARAMETER:      TREE := CONST_VOID;
+        PARAM_TYPESET:  TYPESET_TYPE;
+        ATTRIBUTE_ID:   TREE;
+
+        PREFIX:         TREE;
+        PREFIX_ID:      TREE;
+        PREFIX_TYPE:    TREE;
+
+        NEW_TYPESET:    TYPESET_TYPE := EMPTY_TYPESET;
+        ATTRIBUTE_SUBTYPE: TREE := CONST_VOID;
+        ATTRIBUTE_VALUE: TREE := CONST_VOID;
+    begin
+
+        -- assume not 'RANGE
+        IS_SUBTYPE := FALSE;
+
+        -- split off parameter, if one is given
+        if KIND(EXP) = DN_FUNCTION_CALL then
+            declare
+                PARAM_LIST: SEQ_TYPE := LIST(D(AS_GENERAL_ASSOC_S,EXP));
+            begin
+                ATTRIBUTE_NODE := D(AS_NAME, EXP);
+                POP(PARAM_LIST,PARAMETER);
+                if not IS_EMPTY(PARAM_LIST) then
+                    ERROR(D(LX_SRCPOS,HEAD(PARAM_LIST))
+                            , "Only single parameter allowed for attribute");
+                end if;
+                if KIND(PARAMETER) = DN_ASSOC then
+                    ERROR(D(LX_SRCPOS,PARAMETER)
+                            , "Named notation not allowed for attribute");
+                    PARAMETER := D(AS_EXP, PARAMETER);
+                end if;
+                EVAL_EXP_TYPES(PARAMETER, PARAM_TYPESET);
+            end;
+        end if;
+
+        -- lookup attribute id
+        ATTRIBUTE_ID := EVAL_ATTRIBUTE_IDENTIFIER(ATTRIBUTE_NODE);
+        if ATTRIBUTE_ID = CONST_VOID then
+            ERROR(D(LX_SRCPOS,D(AS_USED_NAME_ID,ATTRIBUTE_NODE))
+                    , "Attribute not known to implementation - "
+                      & PRINTNAME(D(LX_SYMREP
+                                , D(AS_USED_NAME_ID,ATTRIBUTE_NODE) )));
+        elsif DEFINED_ATTRIBUTES'VAL(DI(XD_POS,ATTRIBUTE_ID)) = RANGE_X then
+            IS_SUBTYPE := TRUE;
+        end if;
+
+        -- walk prefix
+        PREFIX := D(AS_NAME, ATTRIBUTE_NODE);
+        WALK_ATTRIBUTE_PREFIX
+                ( PREFIX
+                , PREFIX_ID
+                , PREFIX_TYPE
+                , ATTRIBUTE_ID );
+        D(AS_NAME, ATTRIBUTE_NODE, PREFIX);
+
+        if false then --KIND(D(AS_NAME,EXP)) = DN_ATTRIBUTE
+        --and then PREFIX_ID = CONST_VOID
+        --and then PREFIX_TYPE = CONST_VOID then
+            -- presumably a 'ADDRESS of attribute fcn
+            CHECK_PREFIX_AND_ATTRIBUTE
+                        ( ATTRIBUTE_NODE
+                        , PREFIX_ID
+                        , PREFIX_TYPE
+                        , ATTRIBUTE_SUBTYPE
+                        , ATTRIBUTE_VALUE
+                        , PARAMETER
+                        , PARAM_TYPESET
+                        , IS_FUNCTION => TRUE );
+        else
+            CHECK_PREFIX_AND_ATTRIBUTE
+                        ( ATTRIBUTE_NODE
+                        , PREFIX_ID
+                        , PREFIX_TYPE
+                        , ATTRIBUTE_SUBTYPE
+                        , ATTRIBUTE_VALUE
+                        , PARAMETER
+                        , PARAM_TYPESET
+                        , IS_FUNCTION );
+        end if;
+        if USERPK.DEBUG then
+            PUT("value of attribute = ");PRINT_TREE(ATTRIBUTE_VALUE);NEW_LINE;
+        end if;
+
+        D(SM_EXP_TYPE, ATTRIBUTE_NODE, ATTRIBUTE_SUBTYPE);
+        D(SM_VALUE, ATTRIBUTE_NODE, ATTRIBUTE_VALUE);
+        if ATTRIBUTE_SUBTYPE /= CONST_VOID then
+            ADD_TO_TYPESET(NEW_TYPESET, GET_BASE_TYPE(ATTRIBUTE_SUBTYPE));
+        end if;
+        TYPESET := NEW_TYPESET;
+
+        if PARAMETER /= CONST_VOID then
+            LIST(D(AS_GENERAL_ASSOC_S, EXP), SINGLETON(PARAMETER));
+        end if;
+    end EVAL_ATTRIBUTE;
+
+
+    function RESOLVE_ATTRIBUTE ( EXP: TREE ) return TREE is
+        ATTRIBUTE_NODE: TREE := EXP;
+        ATTRIBUTE_ID:   TREE;
+    begin
+
+        -- split off parameter, if one is given
+        if KIND(EXP) = DN_FUNCTION_CALL then
+            ATTRIBUTE_NODE := D(AS_NAME, EXP);
+            D(AS_EXP, ATTRIBUTE_NODE, HEAD(LIST(D(AS_GENERAL_ASSOC_S,EXP))));
+        end if;
+
+        -- get the attribute id
+        ATTRIBUTE_ID := D(SM_DEFN, D(AS_USED_NAME_ID, ATTRIBUTE_NODE));
+
+        -- if the attribute name was undefined
+        if ATTRIBUTE_ID = CONST_VOID then
+
+            -- just return the attribute node
+            return ATTRIBUTE_NODE;
+
+        -- else
+        else
+
+            case DEFINED_ATTRIBUTES'VAL(DI(XD_POS,ATTRIBUTE_ID)) is
+
+            -- for a range attribute
+            when RANGE_X =>
+
+                -- construct and return range_attribute node
+                return MAKE_RANGE_ATTRIBUTE
+                            ( LX_SRCPOS => D(LX_SRCPOS, ATTRIBUTE_NODE)
+                            , AS_NAME => D(AS_NAME, ATTRIBUTE_NODE)
+                            , AS_USED_NAME_ID => D(AS_USED_NAME_ID
+                                        , ATTRIBUTE_NODE)
+                            , AS_EXP => D(AS_EXP, ATTRIBUTE_NODE)
+                            , SM_TYPE_SPEC => D(SM_EXP_TYPE,ATTRIBUTE_NODE) );
+
+            -- for an attribute which is a function
+            when PRED | SUCC | POS | VAL | VALUE | IMAGE =>
+
+                -- if a parameter was given
+                if KIND(EXP) = DN_FUNCTION_CALL then
+
+                    -- return a function call
+                    D(SM_NORMALIZED_PARAM_S
+                                , EXP
+                                , MAKE_EXP_S
+                                        ( LIST => SINGLETON
+                                                ( D(AS_EXP,ATTRIBUTE_NODE) ) ));
+                    D(AS_EXP, ATTRIBUTE_NODE, CONST_VOID);
+                    D(SM_EXP_TYPE, EXP, D(SM_EXP_TYPE, ATTRIBUTE_NODE));
+                    D(SM_EXP_TYPE, ATTRIBUTE_NODE, CONST_VOID);
+                    D(SM_VALUE, EXP, D(SM_VALUE, ATTRIBUTE_NODE));
+                    D(SM_VALUE, ATTRIBUTE_NODE, CONST_VOID);
+                    return EXP;
+
+                -- else
+                else
+
+                    -- return the attribute node
+                    return ATTRIBUTE_NODE;
+                end if;
+
+            -- for all other attributes
+            when others =>
+
+                -- return the attribute node
+                return ATTRIBUTE_NODE;
+            end case;
+        end if;
+
+    end RESOLVE_ATTRIBUTE;
+
+
+
+    function EVAL_ATTRIBUTE_IDENTIFIER(ATTRIBUTE_NODE: TREE) return TREE is
+        USED_NAME_ID:   constant TREE
+                := MAKE_USED_NAME_ID_FROM_OBJECT
+                        ( D(AS_USED_NAME_ID,ATTRIBUTE_NODE) );
+        DEFLIST:        SEQ_TYPE := LIST(D(LX_SYMREP,USED_NAME_ID));
+        DEF:            TREE;
+        ID:             TREE;
+    begin
+
+        -- replace attribute identifier with used name id
+        D(AS_USED_NAME_ID, ATTRIBUTE_NODE, USED_NAME_ID);
+
+        -- for each def for the attribute identifier
+        while not IS_EMPTY(DEFLIST) loop
+            POP(DEFLIST,DEF);
+
+            -- if it is an attribute_id
+            ID := D(XD_SOURCE_NAME,DEF);
+            if KIND(ID) = DN_ATTRIBUTE_ID then
+
+                -- return it as the correct definition
+                D(SM_DEFN, USED_NAME_ID, ID);
+                return ID;
+            end if;
+        end loop;
+
+        -- none was found -- return void
+        D(SM_DEFN, USED_NAME_ID, CONST_VOID);
+        ERROR(D(LX_SRCPOS, USED_NAME_ID)
+                , "Attribute not known - '"
+                  & PRINTNAME(D(LX_SYMREP,USED_NAME_ID)) );
+        return CONST_VOID;
+    end EVAL_ATTRIBUTE_IDENTIFIER;
+
+
+    procedure WALK_ATTRIBUTE_PREFIX
+                ( PREFIX:       in out TREE
+                ; PREFIX_ID:    out TREE
+                ; PREFIX_TYPE:  out TREE
+                ; ATTRIBUTE_ID: TREE )
+    is
+        -- note. prefix_id null for object or expression
+        -- ... and the id for any other named entity (e.g. type_id)
+        -- prefix_type set for object or expression or [sub]type name
+        DEFSET: DEFSET_TYPE := EMPTY_DEFSET;
+        ID: TREE := CONST_VOID;
+        TYPESET: TYPESET_TYPE := EMPTY_TYPESET;
+        PREFIX_TYPE_OUT: TREE := CONST_VOID;
+    begin
+
+        -- assume default values for out parameters
+        PREFIX_ID := CONST_VOID;
+        PREFIX_TYPE := CONST_VOID;
+
+        -- if prefix is a string literal
+        if KIND(PREFIX) = DN_STRING_LITERAL then
+
+            -- make it a used_op
+            PREFIX := MAKE_USED_OP_FROM_STRING(PREFIX);
+        end if;
+
+        -- if prefix is a [selected] name
+        if KIND(PREFIX) = DN_SELECTED
+        or else KIND(PREFIX) in CLASS_USED_OBJECT then
+
+            -- evaluate the name
+            FIND_VISIBILITY(PREFIX, DEFSET);
+            ID := GET_THE_ID(DEFSET);
+
+            case KIND(ID) is
+            when DN_VOID =>
+                PREFIX := RESOLVE_EXP(PREFIX, CONST_VOID);
+            when CLASS_OBJECT_NAME =>
+                REQUIRE_UNIQUE_DEF(PREFIX,DEFSET);
+                STASH_DEFSET(PREFIX, DEFSET);
+                ID := GET_THE_ID(DEFSET);
+                PREFIX_TYPE_OUT := GET_BASE_TYPE(ID);
+                PREFIX_TYPE := PREFIX_TYPE_OUT;
+                PREFIX := RESOLVE_EXP(PREFIX, PREFIX_TYPE_OUT);
+            when CLASS_TYPE_NAME =>
+                REQUIRE_UNIQUE_DEF(PREFIX,DEFSET);
+                ID := GET_THE_ID(DEFSET);
+                PREFIX_TYPE_OUT := GET_BASE_TYPE(ID);
+                if KIND(PREFIX_TYPE_OUT) = DN_TASK_SPEC
+                and then DI(XD_LEX_LEVEL
+                            , GET_DEF_FOR_ID(D(XD_SOURCE_NAME,PREFIX_TYPE_OUT)))
+                        > 0
+                then
+                    PREFIX_TYPE := PREFIX_TYPE_OUT;
+                    STASH_DEFSET(PREFIX, DEFSET);
+                    PREFIX := RESOLVE_EXP(PREFIX, PREFIX_TYPE_OUT);
+                else
+                    PREFIX_ID := ID;
+                    PREFIX := RESOLVE_NAME(PREFIX, GET_THE_ID(DEFSET));
+                    PREFIX_TYPE := D(SM_TYPE_SPEC, ID);
+                end if;
+                return;
+            when DN_OPERATOR_ID | DN_LABEL_ID | DN_PACKAGE_ID
+                        | DN_TASK_BODY_ID =>
+                REQUIRE_UNIQUE_DEF(PREFIX,DEFSET);
+                PREFIX_ID := GET_THE_ID(DEFSET);
+                PREFIX := RESOLVE_NAME(PREFIX, GET_THE_ID(DEFSET));
+                return;
+            when DN_PROCEDURE_ID | DN_FUNCTION_ID | DN_ENTRY_ID
+                        | DN_GENERIC_ID =>
+                -- (prefix may be overloadable or may be expression)
+                if ATTRIBUTE_ID = CONST_VOID then
+                    return;
+                end if;
+
+                case DEFINED_ATTRIBUTES'VAL(DI(XD_POS,ATTRIBUTE_ID)) is
+                when CALLABLE | FIRST | LAST | LENGTH | RANGE_X
+                                | TERMINATED =>
+                    -- expression allowed
+                    declare
+                        GENERAL_ASSOC_S: TREE := MAKE_GENERAL_ASSOC_S
+                                ( LIST => MAKE
+                                , LX_SRCPOS => D(LX_SRCPOS, PREFIX) );
+                    begin
+                        REQUIRE_FUNCTION_OR_ARRAY_DEF(PREFIX, DEFSET);
+                        REDUCE_APPLY_NAMES (PREFIX, DEFSET, GENERAL_ASSOC_S);
+                        REQUIRE_UNIQUE_DEF(PREFIX, DEFSET);
+                        STASH_DEFSET(PREFIX, DEFSET);
+                        PREFIX := MAKE_FUNCTION_CALL
+                                ( AS_NAME => PREFIX
+                                , AS_GENERAL_ASSOC_S => GENERAL_ASSOC_S
+                                , LX_SRCPOS => D(LX_SRCPOS, PREFIX) );
+                        PREFIX_TYPE_OUT := GET_BASE_TYPE(ID);
+                        PREFIX_TYPE := PREFIX_TYPE_OUT;
+                        PREFIX := RESOLVE_EXP
+                                ( PREFIX, PREFIX_TYPE_OUT );
+                    end;
+                when others =>
+                    REQUIRE_UNIQUE_DEF(PREFIX,DEFSET);
+                    PREFIX_ID := GET_THE_ID(DEFSET);
+                    PREFIX := RESOLVE_NAME(PREFIX, GET_THE_ID(DEFSET));
+                    return;
+                end case;
+            when DN_BLOCK_LOOP_ID =>
+                ERROR(D(LX_SRCPOS,PREFIX), "Cannot be attribute prefix");
+                return;
+            when others =>
+                QUIT("Invalid id node for attribute prefix");
+            end case;
+
+        else
+
+            if KIND(PREFIX) = DN_FUNCTION_CALL then
+                declare
+                    NAME: TREE := D(AS_NAME, PREFIX);
+                    HOLD_PREFIX: TREE; -- save prefix to restore it
+                    HOLD_DESIGNATOR: TREE; -- save desig to restore it
+                    SAVE_NAME: TREE := NAME;
+                    GENERAL_ASSOC_S: TREE
+                                := D(AS_GENERAL_ASSOC_S,PREFIX);
+                    GENERAL_ASSOC_LIST: SEQ_TYPE := LIST(GENERAL_ASSOC_S);
+                    INDEX: TREE;
+                begin
+                    if  ( KIND(NAME) = DN_SELECTED
+                        or else KIND(NAME) = DN_USED_OBJECT_ID )
+                    and then not IS_EMPTY(GENERAL_ASSOC_LIST)
+                    and then IS_EMPTY(TAIL(GENERAL_ASSOC_LIST))
+                    and then KIND(HEAD(GENERAL_ASSOC_LIST)) /= DN_ASSOC
+                    then
+                        if KIND(NAME) = DN_SELECTED then
+                            HOLD_DESIGNATOR := D(AS_DESIGNATOR, NAME);
+                            HOLD_PREFIX := D(AS_NAME, NAME);
+                        end if;
+                        FIND_VISIBILITY(NAME, DEFSET);
+                        ID := GET_THE_ID(DEFSET);
+                        if KIND(ID) = DN_VOID then
+                            -- finish here because error already reported
+                            NAME := RESOLVE_EXP(NAME, CONST_VOID);
+                            D(AS_NAME,PREFIX,NAME);
+                            INDEX := HEAD(GENERAL_ASSOC_LIST);
+                            EVAL_EXP_TYPES(INDEX, TYPESET);
+                            INDEX := RESOLVE_EXP(INDEX, CONST_VOID);
+                            LIST(GENERAL_ASSOC_S,SINGLETON(INDEX));
+                            return;
+                        elsif KIND(ID) = DN_ENTRY_ID
+                        and then KIND(D(SM_SPEC,ID))
+                                = DN_ENTRY
+                        and then D(AS_DISCRETE_RANGE, D(SM_SPEC,ID))
+                                /= CONST_VOID
+                        then
+                            NAME := RESOLVE_NAME(NAME, ID);
+                            D(AS_NAME,PREFIX,NAME);
+                            PREFIX_ID := ID;
+                            INDEX := HEAD(GENERAL_ASSOC_LIST);
+                            EVAL_EXP_TYPES(INDEX, TYPESET);
+                            REQUIRE_TYPE
+                                  ( GET_TYPE_OF_DISCRETE_RANGE
+                                        ( D(AS_DISCRETE_RANGE
+                                        , D(SM_SPEC,ID)))
+                                  , INDEX
+                                  , TYPESET);
+                            INDEX := RESOLVE_EXP(INDEX, GET_THE_TYPE(TYPESET));
+                            LIST(GENERAL_ASSOC_S,SINGLETON(INDEX));
+                            return;
+                        elsif KIND(NAME) = DN_SELECTED then
+                            -- put it back to used object id
+                            -- since visibility will be checked again
+                            D(AS_DESIGNATOR, NAME, HOLD_DESIGNATOR);
+                            D(AS_NAME, NAME, HOLD_PREFIX);
+                        end if;
+                    end if;
+                end;
+
+            -- else if prefix is an attribute
+            elsif KIND(PREFIX) = DN_ATTRIBUTE
+            and then EVAL_ATTRIBUTE_IDENTIFIER(PREFIX) /= CONST_VOID then
+
+                case DEFINED_ATTRIBUTES'VAL
+                        (DI(XD_POS,EVAL_ATTRIBUTE_IDENTIFIER(PREFIX)))
+                is
+                    when BASE =>
+                    -- evaluate the 'BASE prefix
+                    declare
+                        BASE_PREFIX:    TREE := D(AS_NAME, PREFIX);
+                        BASE_PREFIX_ID: TREE;
+                        BASE_PREFIX_TYPE: TREE;
+                    begin
+                        WALK_ATTRIBUTE_PREFIX
+                                ( BASE_PREFIX
+                                , BASE_PREFIX_ID
+                                , BASE_PREFIX_TYPE
+                                , EVAL_ATTRIBUTE_IDENTIFIER(PREFIX) );
+                        if KIND(BASE_PREFIX_ID) in CLASS_TYPE_NAME then
+                            PREFIX_ID := BASE_PREFIX_ID;
+                            PREFIX_TYPE_OUT := GET_BASE_TYPE(BASE_PREFIX_TYPE);
+                            PREFIX_TYPE := PREFIX_TYPE_OUT;
+                            PREFIX := RESOLVE_ATTRIBUTE (PREFIX);
+                            D(AS_NAME, PREFIX, BASE_PREFIX);
+                            D(SM_EXP_TYPE, PREFIX, CONST_VOID);
+                        else
+                            ERROR(D(LX_SRCPOS,BASE_PREFIX),
+                                        "Prefix of 'BASE must be a [sub]type");
+                        end if;
+                    end;
+
+                    -- and return
+                    return;
+
+                when PRED | SUCC | VAL | IMAGE | POS | VALUE =>
+                    -- Note. these can be prefix of 'ADDRESS
+                    -- (ACVC test AD7201E.ADA)
+                    -- Seems strange for 'VAL and 'POS (not redefinable)
+                    declare
+                        BASE_PREFIX:    TREE := D(AS_NAME, PREFIX);
+                        BASE_PREFIX_ID: TREE;
+                        BASE_PREFIX_TYPE: TREE;
+                    begin
+                        WALK_ATTRIBUTE_PREFIX
+                                ( BASE_PREFIX
+                                , BASE_PREFIX_ID
+                                , BASE_PREFIX_TYPE
+                                , EVAL_ATTRIBUTE_IDENTIFIER(PREFIX) );
+                        if KIND(BASE_PREFIX_ID) in CLASS_TYPE_NAME then
+                            PREFIX_ID := CONST_VOID;
+                            PREFIX_TYPE_OUT := CONST_VOID;
+                            PREFIX_TYPE := PREFIX_TYPE_OUT;
+                            PREFIX := RESOLVE_ATTRIBUTE (PREFIX);
+                            D(AS_NAME, PREFIX, BASE_PREFIX);
+                            D(SM_EXP_TYPE, PREFIX, CONST_VOID);
+                        else
+                            ERROR(D(LX_SRCPOS,BASE_PREFIX),
+                                        "Prefix of attribute must be a [sub]type");
+                        end if;
+
+                        return;
+                    end;
+
+                when others => 
+                    null;
+                end case;
+            end if;
+
+
+            -- when we get here, prefix must be an expression
+            -- $$$$ no, it could also be member of entry family
+            EVAL_EXP_TYPES(PREFIX, TYPESET);
+
+            -- $$$$ limit to name or prefix
+
+            REQUIRE_UNIQUE_TYPE(PREFIX, TYPESET);
+            PREFIX_TYPE_OUT := GET_THE_TYPE(TYPESET);
+            PREFIX_TYPE := PREFIX_TYPE_OUT;
+            PREFIX := RESOLVE_EXP(PREFIX, PREFIX_TYPE_OUT);
+        end if;
+
+    end WALK_ATTRIBUTE_PREFIX;
+
+
+    procedure CHECK_PREFIX_AND_ATTRIBUTE
+                ( ATTRIBUTE_NODE        : TREE
+                ; PREFIX_ID             : TREE
+                ; PREFIX_TYPE           : TREE
+                ; ATTRIBUTE_SUBTYPE     : out TREE
+                ; ATTRIBUTE_VALUE       : out TREE
+                ; PARAMETER             : in out TREE
+                ; PARAM_TYPESET         : in out TYPESET_TYPE
+                ; IS_FUNCTION:            BOOLEAN )
+    is
+        ATTRIBUTE_ID: TREE
+                := D(SM_DEFN, D(AS_USED_NAME_ID, ATTRIBUTE_NODE));
+                PREFIX_ERROR: BOOLEAN := FALSE;
+        WHICH_ATTRIBUTE: DEFINED_ATTRIBUTES;
+        WHICH_SUBSCRIPT: INTEGER := 1;
+        PREFIX_BASE: constant TREE := GET_BASE_TYPE(PREFIX_TYPE);
+        PREFIX_SUBSTRUCT: TREE;
+    begin
+
+        -- return if attribute_id is void
+        if ATTRIBUTE_ID = CONST_VOID then
+            if PARAMETER /= CONST_VOID then
+                PARAMETER := RESOLVE_EXP(PARAMETER, CONST_VOID);
+            end if;
+            return;
+        end if;
+
+        -- set default results
+        ATTRIBUTE_SUBTYPE := MAKE(DN_ANY_INTEGER);
+        ATTRIBUTE_VALUE := CONST_VOID;
+
+        -- check possible prefixes
+        WHICH_ATTRIBUTE := DEFINED_ATTRIBUTES'VAL(DI(XD_POS,ATTRIBUTE_ID));
+        case WHICH_ATTRIBUTE is
+        when ADDRESS =>
+            ATTRIBUTE_SUBTYPE := PREDEFINED_ADDRESS;
+            if PREDEFINED_ADDRESS = CONST_VOID then
+                ERROR(D(LX_SRCPOS,ATTRIBUTE_NODE),
+                        "Predefined SYSTEM not withed");
+            end if;
+            if KIND(PREFIX_ID) not in CLASS_UNIT_NAME'FIRST .. DN_ENTRY_ID
+            and then ( KIND(PREFIX_ID) /= DN_TYPE_ID
+                       or else KIND(D(SM_TYPE_SPEC, PREFIX_ID)) /= DN_TASK_SPEC
+                       or else DI(XD_LEX_LEVEL
+                               , D(XD_REGION_DEF,GET_DEF_FOR_ID(PREFIX_ID)))
+                           = 0)
+            and then PREFIX_ID /= CONST_VOID then
+                PREFIX_ERROR := TRUE;
+            end if;
+        when AFT | FORE =>
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE)) = DN_FIXED then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    if WHICH_ATTRIBUTE = AFT then
+                        if GET_FIXED_SMALL(PREFIX_SUBSTRUCT)
+                                        >= U_REAL(1, 10)
+                        then
+                            ATTRIBUTE_VALUE := U_VAL(2);
+                        else
+                            ATTRIBUTE_VALUE := U_VAL
+                                    ( 1 + DIGITS_IN_INTEGER_PART
+                                        ( U_REAL(1) / GET_FIXED_SMALL
+                                          (PREFIX_SUBSTRUCT)));
+                        end if;
+                    else -- fore
+                        ATTRIBUTE_VALUE := U_VAL
+                                ( 1 + DIGITS_IN_INTEGER_PART(GET_FIXED_BOUND
+                                       ( PREFIX_SUBSTRUCT )) );
+                    end if;
+                end if;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when BASE =>
+            ERROR(D(LX_SRCPOS, D(AS_USED_NAME_ID,ATTRIBUTE_NODE))
+                        , "Attribute 'BASE not allowed");
+        when CALLABLE | TERMINATED =>
+            ATTRIBUTE_SUBTYPE := PREDEFINED_BOOLEAN;
+            if PREFIX_ID = CONST_VOID
+            and then KIND(GET_APPROPRIATE_BASE(PREFIX_TYPE)) = DN_TASK_SPEC then
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when CONSTRAINED =>
+            ATTRIBUTE_SUBTYPE := PREDEFINED_BOOLEAN;
+            if ( PREFIX_ID = CONST_VOID
+                    and then ( KIND(GET_APPROPRIATE_BASE(PREFIX_TYPE))
+                                = DN_RECORD
+                            or else KIND(GET_APPROPRIATE_BASE(PREFIX_TYPE))
+                                in CLASS_PRIVATE_SPEC )
+                    and then not IS_EMPTY(LIST(D(SM_DISCRIMINANT_S
+                                , GET_APPROPRIATE_BASE(PREFIX_TYPE) ))) )
+            or else ( KIND(PREFIX_ID) in CLASS_TYPE_NAME
+                    --and then IS_NONLIMITED_TYPE(D(SM_TYPE_SPEC,PREFIX_ID))
+                    and then IS_PRIVATE_TYPE(D(SM_TYPE_SPEC,PREFIX_ID)) )
+            then
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when PRENAME.COUNT =>
+            if KIND(PREFIX_ID) /= DN_ENTRY_ID then
+                PREFIX_ERROR := TRUE;
+            end if;
+        when DELTA_X =>
+            ATTRIBUTE_SUBTYPE := MAKE(DN_ANY_REAL);
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE)) = DN_FIXED then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    ATTRIBUTE_VALUE := D(SM_ACCURACY,PREFIX_SUBSTRUCT);
+                end if;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when DIGITS_X | EMAX | MACHINE_EMAX | MACHINE_EMIN | MACHINE_MANTISSA
+                        | MACHINE_RADIX | SAFE_EMAX =>
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE)) = DN_FLOAT then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    case WHICH_ATTRIBUTE is
+                    when DIGITS_X =>
+                        ATTRIBUTE_VALUE := D(SM_ACCURACY,PREFIX_SUBSTRUCT);
+                    when EMAX =>
+                        ATTRIBUTE_VALUE := U_VAL(4)
+                                * D(SM_ACCURACY,PREFIX_SUBSTRUCT);
+                    when MACHINE_EMAX | SAFE_EMAX =>
+                        -- ($$$ hard wired values for machine attributes)
+                        if PREFIX_TYPE = PREDEFINED_FLOAT then
+                            ATTRIBUTE_VALUE := U_VAL(126);
+                        else
+                            ATTRIBUTE_VALUE := U_VAL(1022);
+                        end if;
+                    when MACHINE_EMIN =>
+                        if PREFIX_TYPE = PREDEFINED_FLOAT then
+                            ATTRIBUTE_VALUE := U_VAL(-126);
+                        else
+                            ATTRIBUTE_VALUE := U_VAL(-1022);
+                        end if;
+                    when MACHINE_MANTISSA =>
+                        if PREFIX_TYPE = PREDEFINED_FLOAT then
+                            ATTRIBUTE_VALUE := U_VAL(23);
+                        else
+                            ATTRIBUTE_VALUE := U_VAL(51);
+                        end if;
+                    when MACHINE_RADIX =>
+                        ATTRIBUTE_VALUE := U_VAL(2);
+                    when others =>
+                        QUIT("Impossible case");
+                    end case;
+                end if;
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when MANTISSA =>
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE)) in CLASS_REAL then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    if KIND(PREFIX_SUBSTRUCT) = DN_FLOAT then
+                        ATTRIBUTE_VALUE := GET_FLOAT_MANTISSA
+                                ( PREFIX_SUBSTRUCT );
+                    else
+                        ATTRIBUTE_VALUE := GET_FIXED_MANTISSA(PREFIX_SUBSTRUCT);
+                    end if;
+                end if;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when EPSILON =>
+            ATTRIBUTE_SUBTYPE := MAKE(DN_ANY_REAL);
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE)) = DN_FLOAT then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    ATTRIBUTE_VALUE := U_REAL(1) / (U_VAL(2)
+                            ** GET_FLOAT_MANTISSA(PREFIX_SUBSTRUCT) );
+                end if;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when LARGE | SAFE_LARGE | SAFE_SMALL | SMALL =>
+            ATTRIBUTE_SUBTYPE := MAKE(DN_ANY_REAL);
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE)) in CLASS_REAL then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+                if not IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    null;
+                elsif KIND(PREFIX_SUBSTRUCT) = DN_FLOAT then
+                    case WHICH_ATTRIBUTE is
+                    when LARGE =>
+                        ATTRIBUTE_VALUE :=
+                                ( U_REAL(1)
+                                      - U_REAL(1) / U_VAL(2)
+                                        ** GET_FLOAT_MANTISSA
+                                          (PREFIX_SUBSTRUCT))
+                                * U_VAL(16) ** GET_FLOAT_MANTISSA
+                                          (PREFIX_SUBSTRUCT);
+                    when SAFE_LARGE =>
+                        if GET_BASE_TYPE(PREFIX_TYPE) = PREDEFINED_INTEGER then
+                            ATTRIBUTE_VALUE :=
+                                    ( U_REAL(1)
+                                         - U_REAL(1)/U_VAL(2)**U_VAL(23) )
+                                    * U_VAL(2) ** U_VAL(126);
+                        else
+                            ATTRIBUTE_VALUE :=
+                                    ( U_REAL(1)
+                                         - U_REAL(1)/U_VAL(2)**U_VAL(51) )
+                                    * U_VAL(2) ** U_VAL(1022);
+                        end if;
+                    when SAFE_SMALL =>
+                        if GET_BASE_TYPE(PREFIX_TYPE) = PREDEFINED_INTEGER then
+                            ATTRIBUTE_VALUE :=
+                                    ( U_REAL(1, 2) )
+                                    / U_VAL(2) ** U_VAL(126);
+                        else
+                            ATTRIBUTE_VALUE :=
+                                    ( U_REAL(1, 2) )
+                                    / U_VAL(2) ** U_VAL(1022);
+                        end if;
+                    when SMALL =>
+                        ATTRIBUTE_VALUE :=
+                                ( U_REAL(1, 2) )
+                                / U_VAL(16) ** GET_FLOAT_MANTISSA
+                                          (PREFIX_SUBSTRUCT);
+                    when others =>
+                        QUIT("Impossible case");
+                    end case;
+                else -- fixed
+                    case WHICH_ATTRIBUTE is
+                    when LARGE =>
+                        ATTRIBUTE_VALUE :=
+                                ( U_VAL(2) ** GET_FIXED_MANTISSA
+                                        (PREFIX_SUBSTRUCT)
+                                  - U_VAL(1) )
+                                * GET_FIXED_SMALL
+                                        (PREFIX_SUBSTRUCT);
+                    when SAFE_LARGE =>
+                        ATTRIBUTE_VALUE :=
+                             GET_STATIC_VALUE(D(AS_EXP2,D(SM_RANGE
+                                        ,GET_BASE_TYPE(PREFIX_TYPE))));
+                    when SAFE_SMALL =>
+                        ATTRIBUTE_VALUE :=
+                                GET_FIXED_SMALL
+                                  (GET_BASE_TYPE(PREFIX_TYPE));
+                    when SMALL =>
+                        ATTRIBUTE_VALUE :=
+                                 GET_FIXED_SMALL
+                                        (PREFIX_SUBSTRUCT);
+                    when others =>
+                        QUIT("Impossible case");
+                    end case;
+                end if;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when FIRST | LAST | LENGTH =>
+            -- (static value checked later when argument found)
+            null;
+        when FIRST_BIT | LAST_BIT | POSITION =>
+            if KIND(D(AS_NAME,ATTRIBUTE_NODE)) = DN_SELECTED
+            and then KIND(D(SM_DEFN,D(AS_DESIGNATOR,D(AS_NAME,ATTRIBUTE_NODE))))
+                         in CLASS_COMP_NAME
+            then
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when IMAGE =>
+            if not IS_DISCRETE_TYPE(GET_BASE_TYPE(PREFIX_TYPE)) then
+                PREFIX_ERROR := TRUE;
+            end if;
+            ATTRIBUTE_SUBTYPE := PREDEFINED_STRING;
+        when MACHINE_OVERFLOWS | MACHINE_ROUNDS =>
+            ATTRIBUTE_SUBTYPE := PREDEFINED_BOOLEAN;
+            ATTRIBUTE_VALUE := U_VAL(1);
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE)) in CLASS_REAL then
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when POS =>
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE))
+                        in DN_ENUMERATION .. DN_INTEGER
+            then
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when PRED | SUCC =>
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME
+            and then KIND(GET_BASE_STRUCT(PREFIX_TYPE))
+                        in DN_ENUMERATION .. DN_INTEGER
+            then
+                ATTRIBUTE_SUBTYPE := D(SM_TYPE_SPEC, PREFIX_ID);
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when RANGE_X =>
+            if ( KIND(PREFIX_ID) in CLASS_TYPE_NAME
+                    and then (KIND(GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID))))
+                                in CLASS_CONSTRAINED
+                    and then KIND(GET_APPROPRIATE_BASE(PREFIX_ID))
+                                = DN_ARRAY )
+            or else ( PREFIX_ID = CONST_VOID
+                    and then KIND(GET_APPROPRIATE_BASE(PREFIX_TYPE))
+                                = DN_ARRAY )
+            then
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when SIZE =>
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    ATTRIBUTE_VALUE := D(CD_IMPL_SIZE, PREFIX_SUBSTRUCT);
+                end if;
+            elsif PREFIX_ID = CONST_VOID then
+                -- $$$$ check that it is an object
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when STORAGE_SIZE =>
+            if KIND(GET_BASE_STRUCT(PREFIX_TYPE)) = DN_TASK_SPEC
+            or else (KIND(GET_BASE_STRUCT(PREFIX_TYPE)) = DN_ACCESS
+                    and then KIND(PREFIX_ID) in CLASS_TYPE_NAME)
+            then
+                null;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when VAL | VALUE =>
+            if IS_DISCRETE_TYPE(GET_BASE_TYPE(PREFIX_ID)) then
+                ATTRIBUTE_SUBTYPE := D(SM_TYPE_SPEC, PREFIX_ID);
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        when WIDTH =>
+            if IS_DISCRETE_TYPE(GET_BASE_TYPE(PREFIX_ID)) then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    ATTRIBUTE_VALUE := U_VAL(GET_WIDTH(PREFIX_SUBSTRUCT));
+                end if;
+            else
+                PREFIX_ERROR := TRUE;
+            end if;
+        end case;
+
+        -- put out prefix error, if any
+        if PREFIX_ERROR then
+            ERROR(D(LX_SRCPOS,ATTRIBUTE_NODE), "Invalid prefix for attribute");
+        end if;
+
+        -- if there was a parameter
+        if PARAMETER /= CONST_VOID then
+
+            if KIND(PREFIX_ID) in CLASS_TYPE_NAME then
+                PREFIX_SUBSTRUCT := GET_SUBSTRUCT(D(SM_TYPE_SPEC,PREFIX_ID));
+            else
+                PREFIX_SUBSTRUCT := CONST_VOID;
+            end if;
+
+            case WHICH_ATTRIBUTE is
+            when IMAGE =>
+                REQUIRE_TYPE(PREFIX_BASE, PARAMETER, PARAM_TYPESET);
+                PARAMETER := RESOLVE_EXP(PARAMETER, PARAM_TYPESET);
+            when POS =>
+                REQUIRE_TYPE(PREFIX_BASE, PARAMETER, PARAM_TYPESET);
+                PARAMETER := RESOLVE_EXP(PARAMETER, PARAM_TYPESET);
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    ATTRIBUTE_VALUE := GET_STATIC_VALUE(PARAMETER);
+                end if;
+            when PRED =>
+                REQUIRE_TYPE(PREFIX_BASE, PARAMETER, PARAM_TYPESET);
+                PARAMETER := RESOLVE_EXP(PARAMETER, PARAM_TYPESET);
+                -- $$$$ only for static subtype; check constraint
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    ATTRIBUTE_VALUE
+                             := GET_STATIC_VALUE(PARAMETER) - U_VAL(1);
+                end if;
+            when SUCC =>
+                REQUIRE_TYPE(PREFIX_BASE, PARAMETER, PARAM_TYPESET);
+                PARAMETER := RESOLVE_EXP(PARAMETER, PARAM_TYPESET);
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    ATTRIBUTE_VALUE
+                            := GET_STATIC_VALUE(PARAMETER) + U_VAL(1);
+                end if;
+            when VAL =>
+                REQUIRE_INTEGER_TYPE(PARAMETER, PARAM_TYPESET);
+                PARAMETER := RESOLVE_EXP(PARAMETER, PARAM_TYPESET);
+                if IS_STATIC_SUBTYPE(PREFIX_SUBSTRUCT) then
+                    ATTRIBUTE_VALUE := GET_STATIC_VALUE(PARAMETER);
+                end if;
+            when VALUE =>
+                REQUIRE_TYPE(PREDEFINED_STRING, PARAMETER, PARAM_TYPESET);
+                PARAMETER := RESOLVE_EXP(PARAMETER, PARAM_TYPESET);
+            when FIRST | LAST | RANGE_X | LENGTH =>
+                if KIND(GET_BASE_STRUCT(PREFIX_BASE))
+                        in CLASS_SCALAR
+                then
+                    ERROR(D(LX_SRCPOS,PARAMETER), "Parameter not allowed");
+                    PARAMETER := RESOLVE_EXP(PARAMETER, CONST_VOID);
+                else
+                    REQUIRE_TYPE(MAKE(DN_UNIVERSAL_INTEGER)
+                                , PARAMETER, PARAM_TYPESET);
+                    PARAMETER := RESOLVE_EXP(PARAMETER, PARAM_TYPESET);
+                    if GET_STATIC_VALUE(PARAMETER) = CONST_VOID then
+                        ERROR(D(LX_SRCPOS,PARAMETER)
+                                    , "Parameter must be static");
+                    else
+                        WHICH_SUBSCRIPT := U_POS(GET_STATIC_VALUE(PARAMETER));
+                    end if;
+                end if;
+            when others =>
+                ERROR(D(LX_SRCPOS, PARAMETER)
+                        , "Parameter not allowed for attribute" );
+                PARAMETER := RESOLVE_EXP(PARAMETER,CONST_VOID);
+            end case;
+
+
+        -- else -- since there was no parameter
+        else
+
+            case WHICH_ATTRIBUTE is
+            when IMAGE | PRED | SUCC | VALUE =>
+                if not IS_FUNCTION then
+                    ERROR(D(LX_SRCPOS, D(AS_USED_NAME_ID,ATTRIBUTE_NODE))
+                            , "Parameter required for attribute" );
+                end if;
+            when POS | VAL =>
+                if IS_FUNCTION then
+                    ERROR(D(LX_SRCPOS, D(AS_USED_NAME_ID,ATTRIBUTE_NODE))
+                            , "Attribute is not a function" );
+                else
+                    ERROR(D(LX_SRCPOS, D(AS_USED_NAME_ID,ATTRIBUTE_NODE))
+                            , "Parameter required for attribute" );
+                end if;
+            when others =>
+                if IS_FUNCTION then
+                    ERROR(D(LX_SRCPOS, D(AS_USED_NAME_ID,ATTRIBUTE_NODE))
+                            , "Attribute is not a function" );
+                end if;
+            end case;
+        end if;
+
+        case WHICH_ATTRIBUTE is
+        when FIRST | LAST | RANGE_X | LENGTH =>
+            declare
+                INDEX: TREE := CONST_VOID;
+                INDEX_LIST: SEQ_TYPE;
+                PREFIX_SUBSTRUCT: TREE := PREFIX_TYPE;
+            begin
+                if KIND(PREFIX_SUBSTRUCT) in DN_PRIVATE .. DN_L_PRIVATE then
+                    PREFIX_SUBSTRUCT := D(SM_TYPE_SPEC, PREFIX_SUBSTRUCT);
+                elsif KIND(PREFIX_SUBSTRUCT) = DN_INCOMPLETE then
+                    PREFIX_SUBSTRUCT := D(XD_FULL_TYPE_SPEC, PREFIX_SUBSTRUCT);
+                end if;
+                if KIND(PREFIX_SUBSTRUCT) = DN_ACCESS
+                or else KIND(PREFIX_SUBSTRUCT) = DN_CONSTRAINED_ACCESS then
+                    PREFIX_SUBSTRUCT := D(SM_DESIG_TYPE,PREFIX_SUBSTRUCT);
+                end if;
+                if KIND(PREFIX_SUBSTRUCT) in DN_PRIVATE .. DN_L_PRIVATE then
+                    PREFIX_SUBSTRUCT := D(SM_TYPE_SPEC, PREFIX_SUBSTRUCT);
+                elsif KIND(PREFIX_SUBSTRUCT) = DN_INCOMPLETE then
+                    PREFIX_SUBSTRUCT := D(XD_FULL_TYPE_SPEC, PREFIX_SUBSTRUCT);
+                end if;
+
+                if KIND(PREFIX_SUBSTRUCT)
+                        in CLASS_SCALAR
+                then
+                    -- $$$$ make sure we get subtype
+                    INDEX := PREFIX_SUBSTRUCT;
+                    ATTRIBUTE_SUBTYPE := GET_BASE_TYPE(INDEX);
+                    -- $$$$ value only for static subtype
+                    if WHICH_ATTRIBUTE = FIRST then
+                        if KIND(D(SM_RANGE,INDEX)) = DN_RANGE then
+                            ATTRIBUTE_VALUE := GET_STATIC_VALUE
+                                    ( D(AS_EXP1, D(SM_RANGE, INDEX)) );
+                        end if;
+                    elsif WHICH_ATTRIBUTE = LAST then
+                        if KIND(D(SM_RANGE,INDEX)) = DN_RANGE then
+                            ATTRIBUTE_VALUE := GET_STATIC_VALUE
+                                    ( D(AS_EXP2, D(SM_RANGE, INDEX)) );
+                        end if;
+                    else
+                        ERROR(D(LX_SRCPOS,ATTRIBUTE_NODE),
+                                "Array type required");
+                    end if;
+                else
+                    PREFIX_SUBSTRUCT := GET_BASE_STRUCT(PREFIX_SUBSTRUCT);
+                    if KIND(PREFIX_SUBSTRUCT) = DN_ARRAY then
+                        INDEX_LIST := LIST(D(SM_INDEX_S, PREFIX_SUBSTRUCT));
+                        loop
+                            if IS_EMPTY(INDEX_LIST) then
+                                ERROR(D(LX_SRCPOS,PARAMETER),
+                                        "Parameter not within array dimension");
+                                ATTRIBUTE_SUBTYPE := CONST_VOID;
+                                exit;
+                            else
+                                POP(INDEX_LIST, INDEX);
+                                WHICH_SUBSCRIPT := WHICH_SUBSCRIPT - 1;
+                                if WHICH_SUBSCRIPT = 0 then
+                                    if WHICH_ATTRIBUTE /= LENGTH then
+                                        ATTRIBUTE_SUBTYPE := GET_BASE_TYPE
+                                                    ( D(SM_TYPE_SPEC,INDEX) );
+                                    end if;
+                                    exit;
+                                end if;
+                            end if;
+                        end loop;
+                    elsif PREFIX_SUBSTRUCT /= CONST_VOID then
+                        ERROR(D(LX_SRCPOS,ATTRIBUTE_NODE),
+                                "Array type required");
+                    end if;
+                end if;
+            end;
+
+        when others =>
+            null;
+        end case;
+
+    end CHECK_PREFIX_AND_ATTRIBUTE;
+
+
+    --procedure WALK_ATTRIBUTE_FUNCTION(EXP: TREE) is
+    --  PREFIX:         TREE := D(AS_NAME, EXP);
+    --  ATTRIBUTE_ID:   TREE := EVAL_ATTRIBUTE_IDENTIFIER(EXP);
+    --  ATTRIBUTE_KIND: DEFINED_ATTRIBUTES;
+    --
+    --  PREFIX_ID:      TREE;
+    --  PREFIX_TYPE:    TREE;
+    --begin
+    --
+    --  -- check attribute identifier
+    --  if ATTRIBUTE_ID /= CONST_VOID then
+    --        ATTRIBUTE_KIND := DEFINED_ATTRIBUTES'VAL(DI(XD_POS,ATTRIBUTE_ID));
+    --      case ATTRIBUTE_KIND is
+    --      when PRED | SUCC | IMAGE | VALUE =>
+    --          null;
+    --      when others =>
+    --          ERROR(D(LX_SRCPOS,D(AS_USED_NAME_ID,EXP))
+    --                    , "Attribute not valid as function" );
+    --          ATTRIBUTE_ID := CONST_VOID;
+    --      end case;
+    --  end if;
+    --
+    --  -- resolve the prefix
+    --  WALK_ATTRIBUTE_PREFIX
+    --          ( PREFIX
+    --          , PREFIX_ID
+    --          , PREFIX_TYPE
+    --          , ATTRIBUTE_ID );
+    --
+    --  -- store the resolved prefix
+    --  D(AS_NAME, EXP, PREFIX);
+    --end WALK_ATTRIBUTE_FUNCTION;
+
+
+end ATTWALK;

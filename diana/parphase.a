@@ -1,0 +1,728 @@
+with TEXT2_IO, USERPK, DIANA, DIANATTR,  DIANAMAN, LSCAN, LTYPE, GRMRTBL;
+use  TEXT2_IO, USERPK, DIANA, DIANATTR,  DIANAMAN, LSCAN, LTYPE, GRMRTBL;
+with GRMROPS; use GRMROPS;
+with SET_DFLT;
+with PRINTNOD; use PRINTNOD;
+
+procedure PARPHASE is
+  USER_ROOT:	TREE;
+  INFILE_NAME:	PNAME;-- name of Ada source file
+  IFILE:	FILE_TYPE; -- Ada source file
+  LINE_COUNT:	NATURAL;
+  SLINE:	LINE;	   -- text of the current line
+  COL:		NATURAL;   -- the last column scanned
+  F_COL:	NATURAL;   -- first column of lexical element
+  LAST: 	NATURAL;   -- number of characters in line read
+  TTYPE:	LEXTYPE;   -- type of the lexical element
+  TTEXT:	PNAME;	   -- text of the lexical element
+
+  SOURCE_LIST:	SEQ_TYPE;  -- list of source line records
+  SOURCELINE:	TREE;
+  SOURCEPOS:	TREE;	   -- (really a SOURCE_POSITION)
+  TOKENSYM:	BYTE;	   -- byte with ter/nonter rep
+
+  PRINT_PARSE:	BOOLEAN := FALSE; -- print parse tree while parsing
+  PRINT_SEM:	BOOLEAN := FALSE; -- print semantics while parsing
+
+  -- Semantic stack
+  SS_SUB: INTEGER;
+  type SS_TYPE is
+    record
+      I:	SEQ_TYPE;  -- I.H is node, symrep, numrep or I is list
+      SPOS:	TREE;	   -- source position
+    end record;
+  SS: array (1 .. 100) of SS_TYPE;
+
+  -- Semantic work area:
+  WW: SS_TYPE;
+  TT: SS_TYPE;
+  NODE_CREATED: 	BOOLEAN;  -- Node was created by this reduction
+
+  procedure MAIN;
+  procedure OPEN_IFILE;
+  procedure READ_PARSE_TABLES;
+  procedure PARSE_COMPILATION;
+  procedure GET_TOKEN;
+  procedure BUILD_TREE(ACTION: INTEGER; AP: in out INTEGER);
+  procedure MAKE_NODE(ACTION: INTEGER);
+  procedure ARG_NODE(SON: INTEGER);
+  procedure ARG_ID_S;
+  procedure ARG_VOID;
+  procedure POP_NODE(AA: out SS_TYPE);
+  procedure POP_TOKEN(AA: out SS_TYPE);
+  procedure POP_LIST(AA: out SS_TYPE);
+  procedure POP_ITEM(AA: out SS_TYPE);
+  procedure MAKE_FCN_NODE(ACTION: INTEGER; AP: in out INTEGER; SEQ: SEQ_TYPE);
+  procedure PUSH_NODE;
+  procedure TABLE_ERROR (MSG: STRING);
+
+  procedure MAIN is
+  begin
+--@ PRINT_PARSE := TRUE;  -- force print in debug mode
+    OPEN_DIANA;
+    -- (Note.  User_root created by loadgrmr)
+    -- USER_ROOT := MAKE(DN_USER_ROOT);
+    -- D(XD_USER_ROOT, CONST_ROOT, USER_ROOT);
+    USER_ROOT := D(XD_USER_ROOT, CONST_ROOT);
+
+    READ_PARSE_TABLES;
+
+    OPEN_IFILE;
+    SOURCE_LIST := MAKE;
+    D(XD_SOURCENAME, USER_ROOT, STORETEXT(INFILE_NAME));
+
+    PARSE_COMPILATION;
+
+    LIST(CONST_ROOT, SOURCE_LIST);
+    CLOSE(IFILE);
+
+    CLOSE_DIANA;
+  end MAIN;
+
+  procedure OPEN_IFILE is
+  begin
+    -- Get source file name
+    --INFILE_NAME := COMMAND_LINE;
+    SET(INFILE_NAME, TO => "$$$PGM.TMP");
+    -- remove leading blanks from file name (Janus requires)
+    declare
+      COL: INTEGER := 0;
+      INFILE_TEXT: STRING(1 .. 50);
+      LAST: INTEGER;
+    begin
+      LAST := LENGTH(INFILE_NAME);
+      INFILE_TEXT(1 .. LAST) := TO_STRING(INFILE_NAME);
+      while LAST > 0 and then INFILE_TEXT(LAST) = ' ' loop
+	LAST := LAST - 1;
+      end loop;
+      if LAST >= 2 and then INFILE_TEXT (LAST-1) = '/'
+      and then (INFILE_TEXT(LAST) = 'P'
+              or INFILE_TEXT(LAST) = 'p'
+              or INFILE_TEXT(LAST) = 'S'
+              or INFILE_TEXT(LAST) = 's')
+      then
+        PRINT_PARSE := TRUE;
+        if (INFILE_TEXT(LAST) = 'S'
+                  or INFILE_TEXT(LAST) = 's')
+        then
+	  PRINT_SEM := TRUE;
+	end if;
+        LAST := LAST - 2;
+        while LAST > 0 and then INFILE_TEXT(LAST) = ' ' loop
+	  LAST := LAST - 1;
+        end loop;
+      end if;
+      for I in 1 .. LAST loop
+        exit
+          when INFILE_TEXT(I) /= ' ';
+        COL := COL + 1;
+      end loop;
+      SET(INFILE_NAME, TO => INFILE_TEXT(COL + 1 .. LAST));
+    end;
+    PUT("Parsing: ");PUT_LINE(INFILE_NAME);
+
+    OPEN (IFILE, IN_FILE, TO_STRING(INFILE_NAME));
+    LINE_COUNT := 0;
+  end OPEN_IFILE;
+
+  procedure READ_PARSE_TABLES is
+
+    package SEQ_IO renames GRMRTBL.GRMRTBL_IO;
+
+    GRMR_DATA: GRMRTBL_RECORD;
+    BIN_FILE: SEQ_IO.FILE_TYPE;
+  begin
+
+    SEQ_IO.OPEN(BIN_FILE, SEQ_IO.IN_FILE, "PARSE.BIN");
+    SEQ_IO.READ(BIN_FILE, GRMR_DATA);
+    SEQ_IO.CLOSE(BIN_FILE);
+
+    ST_TBL	:= GRMR_DATA.ST_TBL;
+    ST_TBL_LAST	:= GRMR_DATA.ST_TBL_LAST;
+    AC_SYM	:= GRMR_DATA.AC_SYM;
+    AC_TBL	:= GRMR_DATA.AC_TBL;
+    AC_SYM_LAST	:= GRMR_DATA.AC_SYM_LAST;
+    AC_TBL_LAST	:= GRMR_DATA.AC_TBL_LAST;
+    NTER_PG	:= GRMR_DATA.NTER_PG;
+    NTER_LN	:= GRMR_DATA.NTER_LN;
+    NTER_LAST	:= GRMR_DATA.NTER_LAST;
+
+  end READ_PARSE_TABLES;
+
+  procedure PARSE_COMPILATION is
+    STACK_MAX: constant := 125;
+    SP: INTEGER range 1 .. STACK_MAX;
+    type STACK_TYPE is
+      record
+	STATE:		POSITIVE;
+	SRCPOS: 	TREE;
+      end record;
+    STACK: array(1 .. STACK_MAX) of STACK_TYPE;
+
+    STATE:		POSITIVE;
+    AP: 		INTEGER;
+    ACTION:		INTEGER;
+    ASYM:		BYTE;
+    NBR_OF_SYLS:	NATURAL; -- number of syllables to be popped
+    ZERO_BYTE:		constant BYTE := BYTE(0);
+
+    procedure DEBUG_PRINT(TXT: STRING) is
+    begin
+       for I in 2 .. SP loop
+         PUT("  ");    -- '' -- make editor keep the spaces !!
+       end loop;
+       PUT(STATE,1);PUT('~');
+       if 2 * SP + TXT'LENGTH > 77 then
+	 PUT_LINE(TXT(1 .. 77 - 2 * SP));
+       else
+         PUT_LINE(TXT);
+       end if;
+    end DEBUG_PRINT;
+
+    procedure DEBUG_PRINT(V: TREE) is
+    begin
+      DEBUG_PRINT(PRINTNAME(V));
+    end DEBUG_PRINT;
+
+  begin
+    LEX_INIT;
+    TTYPE := LT_END_MARK; -- force new line
+    SOURCEPOS := CONST_VOID; -- well, put something there
+    GET_TOKEN;
+
+    STATE := 1;
+    SP := 1;
+    STACK(1).STATE := 1;
+    STACK(1).SRCPOS := SOURCEPOS;
+    STACK(2).SRCPOS := SOURCEPOS;
+
+    SS_SUB := 0; -- start with empty semantic stack
+
+    loop
+      AP := ST_TBL(STATE);
+--@   PUT("@@@SP,STATE,AP,TOK#,TOK=");PUT(SP);PUT(STATE);PUT(AP);
+--@   PUT(INTEGER(TOKENSYM),4);PUT(' ');PUT_LINE(TTEXT);
+      if AP <= 0 then
+	ACTION := AP;
+      else
+	-- points to shift stuff
+	loop
+	  ASYM := AC_SYM(AP);
+--@	  PUT("ASYM=");PUT(INTEGER(ASYM));NEW_LINE;
+	  exit
+	    when ASYM = ZERO_BYTE or else ASYM = TOKENSYM;
+	  AP := AP + 1;
+	end loop;
+	ACTION := integer(AC_TBL(AP));
+--@	PUT("ACTION=");PUT(ACTION);NEW_LINE;
+      end if;
+      if ACTION > 0 then -- can't be semantics since didn't indirect
+	-- shift terminal
+        if PRINT_PARSE then
+ 	  if TTYPE in LT_WITH_SEMANTICS or else TTYPE = LT_ERROR then
+	    DEBUG_PRINT(LEX_IMAGE(TTYPE)&"~"&TTEXT);
+	  else
+	    DEBUG_PRINT(TO_STRING(TTEXT));
+	  end if;
+	end if;
+
+	-- add to semantic stack if this token has semantics
+	if TTYPE in LT_WITH_SEMANTICS then
+	  WW.I.T := CONST_FALSE;  -- it is a token
+	  WW.SPOS := SOURCEPOS;
+	  if TTYPE = LT_NUMERIC_LIT then
+	    WW.I.H := STORETEXT(TTEXT);
+	  else
+	    WW.I.H := STORESYM(TTEXT);
+	  end if;
+	  PUSH_NODE;
+	end if;
+
+	if TTYPE = LT_END_MARK then
+	  -- reached end of compilation successfully
+	  PUT_LINE("Successful parse.");
+	  if SP /= 2 then
+	    PUT("However, SP = ");PUT(SP,1);NEW_LINE;
+	  end if;
+	  if SS_SUB /= 1 then
+	    PUT("However, SS_SUB = ");PUT(SS_SUB,1);NEW_LINE;
+	  else
+	    WW := SS(1);
+	    if WW.I.T /= CONST_TRUE then
+	      PUT_LINE("However, AST is not a node.");
+	    else
+	      -- save syntax tree in user root
+	      D(XD_STRUCTURE, USER_ROOT, WW.I.H);
+	    end if;
+	  end if;
+	  exit;
+	end if;
+	SP := SP + 1;
+	STATE := ACTION;
+	STACK(SP).STATE := ACTION;
+	STACK(SP).SRCPOS := SOURCEPOS;
+	STACK(SP+1).SRCPOS := SOURCEPOS;
+	GET_TOKEN;
+      elsif ACTION = 0 then
+	-- syntax error encountered
+	PUT_LINE(SLINE.BDY(1 .. SLINE.LEN));
+	ERROR(SOURCEPOS,"Syntax error - " & TTEXT);
+	exit;
+      else
+	-- semantic and reduce actions
+	NODE_CREATED := FALSE;
+	loop
+	  if ACTION > -10000 then  -- transfer to semantic action table
+	    AP := - ACTION; -- transfer in table
+	    loop
+	      ACTION := integer(AC_TBL(AP));
+--@	      PUT("SHIFT:AP,ACTION=");PUT(AP);PUT(ACTION);NEW_LINE;
+	      exit
+		when ACTION <= 0;
+	      BUILD_TREE(ACTION, AP); -- increments AP internally
+	    end loop;
+	  end if;
+	  if ACTION > -30000 and ACTION <= -10000 then
+	    -- reduce
+	    ACTION :=  - ACTION - 10000;
+	    NBR_OF_SYLS := ACTION/1000;
+	    ACTION := ACTION mod 1000; -- i.e., rule
+--@	    PUT("ACTION,SYLS,SP=");PUT(ACTION);PUT(NBR_OF_SYLS);PUT(SP);
+--@	    NEW_LINE;
+	    SP := SP - NBR_OF_SYLS; -- pop the stack
+	    STATE := STACK(SP).STATE;
+--@	    PUT("SP;STATE=");PUT(SP,3);PUT(STATE);NEW_LINE;
+	    SS(SS_SUB).SPOS := STACK(SP+1).SRCPOS;
+	    if NODE_CREATED and then SS(SS_SUB).I.T = CONST_TRUE
+	    and then SS(SS_SUB).I.H /= CONST_VOID then
+	      D(LX_SRCPOS, SS(SS_SUB).I.H, SS(SS_SUB).SPOS);
+	    end if;
+	    if PRINT_PARSE then
+              DEBUG_PRINT(MAKE_TREE(INTEGER(NTER_PG(ACTION)),
+                        NODE_NAME'POS(DN_TXTREP),
+			INTEGER(NTER_LN(ACTION))));
+            end if;
+	    -- find goto for nonterminal in this state
+	    AP := ST_TBL(STATE);
+	    loop
+	      AP := AP - 1;
+	      ASYM := AC_SYM(AP);
+--@	      PUT("AP,ASYM,ACTION=");PUT(AP);PUT(INTEGER(ASYM),4);
+--@	      PUT(ACTION);NEW_LINE;
+	      if ASYM = ZERO_BYTE then
+		PUT_LINE ("******Nonter goto not found.");
+		raise ASSERTION_ERROR;
+	      end if;
+	      exit
+		when INTEGER(ASYM) = ACTION;
+	    end loop;
+	    STATE := integer(AC_TBL(AP));
+	    SP := SP + 1;
+	    STACK(SP).STATE := STATE;
+	    if NBR_OF_SYLS = 0 then
+	      -- nullable reduction; srcpos not already there
+	      STACK(SP).SRCPOS := SOURCEPOS;
+	    end if;
+	    STACK(SP+1).SRCPOS := SOURCEPOS;
+--@	    PUT("SP,STATE=");PUT(SP);PUT(STATE);NEW_LINE;
+	    exit;
+	  else
+	    PUT_LINE("parse_table_error");
+	    raise ASSERTION_ERROR;
+	  end if;
+	end loop;
+      end if;
+    end loop;
+  end PARSE_COMPILATION;
+
+  procedure GET_TOKEN is
+  begin
+    if TTYPE /= LT_END_MARK then
+      LEX_SCAN(SLINE, COL, F_COL, TTYPE, TTEXT);
+    end if;
+    while TTYPE = LT_END_MARK loop
+      if END_OF_FILE(IFILE) then
+        -- don't change sourcepos, for now
+	SET(TTEXT, TO => "*END*"); -- for debug messages
+	if PRINT_PARSE then
+	  PUT_LINE("========*END*");
+	end if;
+	exit;
+      -- Read and store a line
+      end if;
+      LINE_COUNT := LINE_COUNT + 1;
+      if END_OF_LINE(IFILE) then
+        -- Don't read zero-length line (Janus bug)
+	SKIP_LINE(IFILE);
+	LAST := 0;
+      else
+	GET_LINE(IFILE,SLINE.BDY,LAST);
+      end if;
+      SLINE.LEN := LAST;
+      if PRINT_PARSE then
+	PUT("========");PUT_LINE(SLINE.BDY(1 .. LAST));
+      end if;
+      COL := 0;
+
+      -- get first atom on line
+      LEX_SCAN(SLINE, COL, F_COL, TTYPE, TTEXT);
+      if TTYPE /= LT_END_MARK then
+	SOURCELINE := MAKE(DN_SOURCELINE);
+	DI(XD_NUMBER, SOURCELINE, LINE_COUNT);
+	LIST(SOURCELINE, MAKE);
+	SOURCE_LIST := APPEND(SOURCE_LIST, SOURCELINE);
+	if LAST = MAX_STRING
+	and then not END_OF_LINE(IFILE) then
+	    ERROR( MAKE_SOURCE_POSITION(SOURCELINE,MAX_STRING)
+	   		, "Line too long for implementation" );
+	end if;
+      end if;
+    end loop;
+
+    if TTYPE /= LT_END_MARK then
+      SOURCEPOS := MAKE_SOURCE_POSITION (SOURCELINE, F_COL);
+    end if;
+    TOKENSYM := BYTE(LEXTYPE'POS(TTYPE)); -- byte to compare
+
+--@ PUT(">>>>>>>>");PUT(LEX_IMAGE(TTYPE));
+--@ if TTYPE in LT_WITH_SEMANTICS then
+--@   PUT(" - ");PUT(TTEXT);
+--@ end if;
+--@ NEW_LINE;
+
+  end GET_TOKEN;
+
+  procedure BUILD_TREE(ACTION: INTEGER; AP: in out INTEGER) is
+    -- does semantic action and increments AP appropriately
+    ACTION_OP:	 GRMR_OP;
+    ID_NODE:	 TREE;	-- xxx_id constructed here
+    LEFT_NODE:	 TREE;	-- temp. for leftmost node ($DEF)
+    LEFT_KIND:	 NODE_NAME; -- temp for kind of above node
+    T_SEQ:	 SEQ_TYPE;
+  begin
+    ACTION_OP := GRMR_OP'VAL(ACTION / 1000);
+    if PRINT_SEM then
+      PUT("--> ");PUT(GRMR_OP_IMAGE(ACTION_OP));PUT(' ');
+      PUT(ACTION mod 1000, 0);NEW_LINE;
+    end if;
+
+    case ACTION_OP is
+    when G_ERROR =>
+      raise ASSERTION_ERROR;
+    when N_0 =>
+      MAKE_NODE(ACTION);
+      PUSH_NODE;
+    when N_DEF =>
+      POP_NODE(WW);
+      POP_ITEM(TT);
+      if (TT.I.T = CONST_TRUE and then KIND(WW.I.H) in CLASS_BLOCK_LOOP)
+      or else TT.I.T = CONST_FALSE then
+	-- OK.  Either an identifier or void for omitted block_loop_id.
+	null;
+      else
+	TABLE_ERROR("Token or void expected on stack for $DEF");
+      end if;
+
+      ID_NODE := MAKE(ACTION mod 1000);
+      D(LX_SYMREP, ID_NODE, TT.I.H);
+      D(LX_SRCPOS, ID_NODE, TT.SPOS);
+      SET_DFLT(ID_NODE);
+
+      LEFT_NODE := DABS(1, WW.I.H);
+      LEFT_KIND := KIND(LEFT_NODE);
+      if LEFT_KIND = DN_VOID then
+	DABS(1, WW.I.H, ID_NODE);
+      elsif LEFT_KIND = DN_SOURCE_NAME_S then
+	LIST(LEFT_NODE, INSERT(LIST(LEFT_NODE), ID_NODE));
+	D(LX_SRCPOS, LEFT_NODE, TT.SPOS);
+      else
+	TABLE_ERROR("Invalid node on stack for $DEF.");
+      end if;
+      PUSH_NODE;
+    when N_1 =>
+      MAKE_NODE(ACTION);
+      ARG_NODE(1);
+      PUSH_NODE;
+    when N_2 =>
+      MAKE_NODE(ACTION);
+      ARG_NODE(2);
+      ARG_NODE(1);
+      PUSH_NODE;
+    when N_N2 =>
+      MAKE_NODE(ACTION);
+      ARG_NODE(2);
+      ARG_ID_S;
+      PUSH_NODE;
+    when N_V2 =>
+      MAKE_NODE(ACTION);
+      ARG_NODE(2);
+      ARG_VOID;
+      PUSH_NODE;
+    when N_3 =>
+      MAKE_NODE(ACTION);
+      ARG_NODE(3);
+      ARG_NODE(2);
+      ARG_NODE(1);
+      PUSH_NODE;
+    when N_N3 =>
+      MAKE_NODE(ACTION);
+      ARG_NODE(3);
+      ARG_NODE(2);
+      ARG_ID_S;
+      PUSH_NODE;
+    when N_V3 =>
+      MAKE_NODE(ACTION);
+      ARG_NODE(3);
+      ARG_NODE(2);
+      ARG_VOID;
+      PUSH_NODE;
+    when N_L =>
+      POP_LIST(TT);
+      MAKE_NODE(ACTION);
+      LIST(WW.I.H, TT.I);
+      PUSH_NODE;
+    when G_INFIX =>
+      POP_NODE(TT);
+      T_SEQ := INSERT(MAKE, TT.I.H);
+      POP_NODE(TT);
+      T_SEQ := INSERT(T_SEQ, TT.I.H);
+      MAKE_FCN_NODE(ACTION, AP, T_SEQ);
+      PUSH_NODE;
+    when G_UNARY =>
+      POP_NODE(TT);
+      T_SEQ := INSERT(MAKE, TT.I.H);
+      MAKE_FCN_NODE(ACTION, AP, T_SEQ);
+      PUSH_NODE;
+    when G_LX_SYMREP =>
+      POP_NODE(WW);
+      POP_TOKEN(TT);
+
+      --if KIND(TT.I.H) /= DN_SYMBOL_REP then
+      --  -- Also allow void for unnamed block or loop
+      --  if KIND(TT.I.H) /= DN_VOID
+      --  or else KIND(WW.I.H) /= DN_NAMED_STM_ID then      
+      --    TABLE_ERROR("Symbol_rep expected for lx_symrep.");
+      --  end if;
+      --end if;
+
+      D(LX_SYMREP, WW.I.H, TT.I.H);
+      D(LX_SRCPOS, WW.I.H, TT.SPOS);
+
+      PUSH_NODE;
+    when G_LX_NUMREP =>
+      POP_NODE(WW);
+      POP_TOKEN(TT);
+
+      if KIND(TT.I.H) /= DN_TXTREP then
+	TABLE_ERROR("Txtrep expected for lx_numrep.");
+      end if;
+
+      D(LX_NUMREP, WW.I.H, TT.I.H);
+      D(LX_SRCPOS, WW.I.H, TT.SPOS);
+
+      PUSH_NODE;
+    when G_LX_DEFAULT =>
+      POP_NODE(WW);
+      DB(LX_DEFAULT, WW.I.H, TRUE);
+      PUSH_NODE;
+    when G_NOT_LX_DEFAULT =>
+      POP_NODE(WW);
+      DB(LX_DEFAULT, WW.I.H, FALSE);
+      PUSH_NODE;
+    when G_NIL =>
+      WW.I := MAKE;
+      WW.SPOS := SOURCEPOS;
+      PUSH_NODE;
+    when G_INSERT =>
+      POP_LIST(WW);
+      POP_NODE(TT);
+      WW.I := INSERT(WW.I, TT.I.H);
+      WW.SPOS := TT.SPOS;
+      PUSH_NODE;
+    when G_APPEND =>
+      POP_NODE(TT);
+      POP_LIST(WW);
+      WW.I := APPEND(WW.I, TT.I.H);
+      if WW.SPOS = CONST_VOID then
+	WW.SPOS := TT.SPOS;
+      end if;
+      PUSH_NODE;
+    when G_CAT =>
+      POP_LIST(TT);
+      POP_LIST(WW);
+      if WW.I.H = CONST_NIL then
+	WW := TT;
+      elsif TT.I.H = CONST_NIL then
+	null;
+      else
+	WW.I := APPEND(WW.I, TT.I.H);
+      end if;
+      PUSH_NODE;
+    when G_VOID =>
+      WW.I.H := MAKE(DN_VOID);
+      WW.I.T := CONST_TRUE;
+      WW.SPOS := SOURCEPOS;
+      PUSH_NODE;
+    when G_LIST =>
+      POP_NODE(TT);
+      WW.I := INSERT(MAKE, TT.I.H);
+      WW.SPOS := TT.SPOS;
+      PUSH_NODE;
+    when G_EXCH_1 =>
+      WW := SS(SS_SUB);
+      SS(SS_SUB) := SS(SS_SUB - 1);
+      SS(SS_SUB - 1) := WW;
+      if PRINT_SEM then
+        PUT(">>>");PUT(SS_SUB,0);PUT(' ');PUT_LINE("... exch_1");
+      end if;
+    when G_EXCH_2 =>
+      WW := SS(SS_SUB);
+      SS(SS_SUB) := SS(SS_SUB - 2);
+      SS(SS_SUB - 2) := WW;
+      if PRINT_SEM then
+        PUT(">>>");PUT(SS_SUB,0);PUT(' ');PUT_LINE("... exch_2");
+      end if;
+    when G_CHECK_NAME =>
+      SS_SUB := SS_SUB - 1;    -- stub
+      if PRINT_SEM then
+        PUT(">>>");PUT(SS_SUB,0);PUT(' ');PUT_LINE("... pop");
+      end if;
+    when G_CHECK_SUBP_NAME =>
+      SS_SUB := SS_SUB - 1;    -- stub
+      if PRINT_SEM then
+        PUT(">>>");PUT(SS_SUB,0);PUT(' ');PUT_LINE("... pop");
+      end if;
+    when G_CHECK_ACCEPT_NAME =>
+      SS_SUB := SS_SUB - 1;    -- stub
+      if PRINT_SEM then
+        PUT(">>>");PUT(SS_SUB,0);PUT(' ');PUT_LINE("... pop");
+      end if;
+    end case;
+    AP := AP + 1;
+  end BUILD_TREE;
+
+  procedure MAKE_NODE(ACTION: INTEGER) is
+  begin
+    WW.I.H := MAKE(ACTION mod 1000);
+    WW.I.T := CONST_TRUE;  -- marks a node
+    WW.SPOS := SOURCEPOS;
+    D(LX_SRCPOS, WW.I.H, SOURCEPOS);
+    SET_DFLT(WW.I.H); -- set default attributes
+  end MAKE_NODE;
+
+  procedure ARG_NODE(SON: INTEGER) is
+    NN: SS_TYPE;
+  begin
+    POP_NODE(NN);
+    DABS(SON, WW.I.H, NN.I.H);
+    WW.SPOS := NN.SPOS;
+    D(LX_SRCPOS, WW.I.H, NN.SPOS);
+  end ARG_NODE;
+
+  procedure ARG_ID_S is
+    ID_S: TREE := MAKE(DN_SOURCE_NAME_S);
+  begin
+    SET_DFLT(ID_S);
+    LIST(ID_S, MAKE);
+    D(LX_SRCPOS, ID_S, CONST_VOID);
+    DABS(1, WW.I.H, ID_S);
+  end ARG_ID_S;
+
+  procedure ARG_VOID is
+  begin
+    DABS(1, WW.I.H, CONST_VOID);
+  end ARG_VOID;
+
+  procedure POP_NODE(AA: out SS_TYPE) is
+    XX: SS_TYPE;
+  begin
+--@ PUT_LINE("... in POP_NODE");
+    POP_ITEM(XX);
+    if XX.I.T /= CONST_TRUE then
+      TABLE_ERROR("Node expected on semantic stack.");
+    end if;
+    AA := XX;
+  end POP_NODE;
+
+  procedure POP_TOKEN(AA: out SS_TYPE) is
+    XX: SS_TYPE;
+  begin
+--@ PUT_LINE("... in POP_TOKEN");
+    POP_ITEM(XX);
+    if XX.I.T /= CONST_FALSE then
+      TABLE_ERROR("Token expected on semantic stack.");
+    end if;
+    AA := XX;
+  end POP_TOKEN;
+
+  procedure POP_LIST(AA: out SS_TYPE) is
+    XX: SS_TYPE;
+  begin
+--@ PUT_LINE("... in POP_LIST");
+    POP_ITEM(XX);
+    if XX.I.T = CONST_TRUE or else XX.I.T = CONST_FALSE then
+      TABLE_ERROR("List expected on semantic stack.");
+    end if;
+    AA := XX;
+  end POP_LIST;
+
+  procedure POP_ITEM(AA: out SS_TYPE) is
+  begin
+    if SS_SUB <= 0 then
+      TABLE_ERROR("Sem stack underflow.");
+    end if;
+    AA := SS(SS_SUB);
+    SS_SUB := SS_SUB - 1;
+  end POP_ITEM;
+
+  procedure MAKE_FCN_NODE(ACTION: INTEGER; AP: in out INTEGER; SEQ: SEQ_TYPE) is
+    USED_STRING: TREE := MAKE(DN_USED_OP);
+    PARAM_S: TREE := MAKE(DN_GENERAL_ASSOC_S);
+  begin
+    SET_DFLT(USED_STRING);
+    SET_DFLT(PARAM_S);
+    LIST(PARAM_S, SEQ);
+    D(LX_SRCPOS, PARAM_S, D(LX_SRCPOS, HEAD(SEQ)));
+    D(LX_SRCPOS, USED_STRING, D(LX_SRCPOS, PARAM_S));
+    AP := AP + 1;
+    D(LX_SYMREP, USED_STRING,
+	  MAKE_TREE(ACTION mod 1000,
+                    NODE_NAME'POS(DN_SYMBOL_REP), integer(AC_TBL(AP))));
+
+    MAKE_NODE(NODE_NAME'POS(DN_FUNCTION_CALL));
+    SET_DFLT(WW.I.H); -- set default attributes
+    D(AS_NAME, WW.I.H, USED_STRING);
+    DB(LX_PREFIX, WW.I.H, FALSE);
+    D(AS_GENERAL_ASSOC_S, WW.I.H, PARAM_S);
+  end MAKE_FCN_NODE;
+
+  procedure PUSH_NODE is
+  begin
+    SS_SUB := SS_SUB + 1;
+    SS(SS_SUB) := WW;
+    NODE_CREATED := TRUE;
+    if PRINT_SEM then
+      PUT(">>>");PUT(SS_SUB,0);PUT(' ');
+      PRINT_TREE(WW.I.H);PUT(' ');
+      PUT(NODE_IMAGE(KIND(WW.I.T)));
+      if KIND(WW.I.H) in CLASS_ALL_SOURCE then
+        PUT(' ');
+	PRINT_TREE(D(LX_SRCPOS,WW.I.H));
+      end if;
+      NEW_LINE;
+    end if;
+  end PUSH_NODE;
+
+  procedure TABLE_ERROR (MSG: STRING) is
+  begin
+    NEW_LINE;
+    PUT_LINE(SLINE.BDY(1 .. SLINE.LEN));
+    ERROR(SOURCEPOS,MSG);
+    raise ASSERTION_ERROR;
+  end TABLE_ERROR;
+
+begin
+  PUT_LINE("Begin PARPHASE.");
+  MAIN;
+  PUT_LINE("End PARPHASE.");
+end PARPHASE;

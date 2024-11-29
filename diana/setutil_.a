@@ -1,0 +1,90 @@
+with USERPK; use USERPK;
+with DIANAMAN;
+pragma ELABORATE(DIANAMAN);
+
+package SETUTIL is
+
+    type DEFSET_TYPE is private;
+    type TYPESET_TYPE is private;
+    type DEFINTERP_TYPE is private;
+    type TYPEINTERP_TYPE is private;
+    type EXTRAINFO_TYPE is private;
+
+    EMPTY_DEFSET:	constant DEFSET_TYPE;
+    EMPTY_TYPESET:	constant TYPESET_TYPE;
+    NULL_EXTRAINFO:	constant EXTRAINFO_TYPE;
+
+    function GET_DEF(DEFINTERP: DEFINTERP_TYPE) return TREE;
+    function IS_NULLARY(DEFINTERP: DEFINTERP_TYPE) return BOOLEAN;
+    function GET_EXTRAINFO(DEFINTERP: DEFINTERP_TYPE) return EXTRAINFO_TYPE;
+    function IS_EMPTY(DEFSET: DEFSET_TYPE) return BOOLEAN;
+    function HEAD(DEFSET: DEFSET_TYPE) return DEFINTERP_TYPE;
+    procedure POP(DEFSET: in out DEFSET_TYPE; DEFINTERP: out DEFINTERP_TYPE);
+
+    function GET_TYPE(TYPEINTERP: TYPEINTERP_TYPE) return TREE;
+    function GET_EXTRAINFO(TYPEINTERP: TYPEINTERP_TYPE) return EXTRAINFO_TYPE;
+    function IS_EMPTY(TYPESET: TYPESET_TYPE) return BOOLEAN;
+    function HEAD(TYPESET: TYPESET_TYPE) return TYPEINTERP_TYPE;
+    procedure POP ( TYPESET: in out TYPESET_TYPE
+		  ; TYPEINTERP: out TYPEINTERP_TYPE);
+
+    procedure ADD_TO_DEFSET ( DEFSET: in out DEFSET_TYPE
+			    ; DEFINTERP: DEFINTERP_TYPE );
+    procedure ADD_TO_DEFSET ( DEFSET: in out DEFSET_TYPE
+			    ; DEF: TREE
+			    ; EXTRAINFO: EXTRAINFO_TYPE := NULL_EXTRAINFO
+			    ; IS_NULLARY: BOOLEAN := FALSE );
+    procedure ADD_TO_TYPESET ( TYPESET: in out TYPESET_TYPE
+			     ; TYPEINTERP: TYPEINTERP_TYPE );
+    procedure ADD_TO_TYPESET ( TYPESET: in out TYPESET_TYPE
+			     ; TYPE_SPEC: TREE
+			     ; EXTRAINFO: EXTRAINFO_TYPE := NULL_EXTRAINFO );
+
+    procedure REQUIRE_UNIQUE_DEF(EXP: TREE; DEFSET: in out DEFSET_TYPE);
+    procedure REQUIRE_UNIQUE_TYPE(EXP: TREE; TYPESET: in out TYPESET_TYPE);
+
+    function GET_THE_ID(DEFSET: DEFSET_TYPE) return TREE;
+    function THE_ID_IS_NULLARY(DEFSET: DEFSET_TYPE) return BOOLEAN;
+    function GET_THE_TYPE(TYPESET: TYPESET_TYPE) return TREE;
+
+    procedure REDUCE_OPERATOR_DEFS(EXP: TREE; DEFSET: in out DEFSET_TYPE);
+
+    procedure ADD_EXTRAINFO
+		( DEFINTERP:	in out DEFINTERP_TYPE
+		; EXTRAINFO:	EXTRAINFO_TYPE );
+    procedure ADD_EXTRAINFO
+		( DEFINTERP:	in out DEFINTERP_TYPE
+		; EXTRAINFO_OF: TYPEINTERP_TYPE );
+    procedure ADD_EXTRAINFO
+		( TYPEINTERP:	in out TYPEINTERP_TYPE
+		; EXTRAINFO:	EXTRAINFO_TYPE );
+    procedure ADD_EXTRAINFO
+		( TYPEINTERP:	in out TYPEINTERP_TYPE
+		; EXTRAINFO_OF: TYPEINTERP_TYPE );
+    procedure ADD_EXTRAINFO
+		( EXTRAINFO:	in out EXTRAINFO_TYPE
+		; EXTRAINFO_IN: EXTRAINFO_TYPE );
+
+    function INSERT(DEFSET: DEFSET_TYPE; DEFINTERP: DEFINTERP_TYPE)
+	    return DEFSET_TYPE;
+    function INSERT(TYPESET: TYPESET_TYPE; TYPEINTERP: TYPEINTERP_TYPE)
+	    return TYPESET_TYPE;
+
+    procedure stash_defset(exp: tree; defset: defset_type);
+    function fetch_defset(exp: tree) return defset_type;
+    procedure stash_TYPEset(exp: tree; TYPEset: TYPEset_type);
+    function fetch_TYPEset(exp: tree) return TYPEset_type;
+private
+    use DIANAMAN;
+
+    type DEFSET_TYPE is new SEQ_TYPE;
+    type TYPESET_TYPE is new SEQ_TYPE;
+    type DEFINTERP_TYPE is new TREE;
+    type TYPEINTERP_TYPE is new TREE;
+    type EXTRAINFO_TYPE is new SEQ_TYPE;
+
+    EMPTY_DEFSET:	constant DEFSET_TYPE := DEFSET_TYPE(MAKE);
+    EMPTY_TYPESET:	constant TYPESET_TYPE := TYPESET_TYPE(MAKE);
+    NULL_EXTRAINFO:	constant EXTRAINFO_TYPE := EXTRAINFO_TYPE(MAKE);
+
+end SETUTIL;

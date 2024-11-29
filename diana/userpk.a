@@ -1,0 +1,105 @@
+with TEXT2_IO;
+package body USERPK is
+
+-- this is the Verdix/Meridian version
+
+   procedure SET(A: out PNAME; TO: PNAME) is
+     TO_LEN: constant NATURAL := CHARACTER'POS(TO.BDY(0));
+   begin
+     A.BDY(0 .. INTEGER(TO_LEN)) := TO.BDY(0 .. INTEGER(TO_LEN));
+   end;
+
+   procedure SET(A: out PNAME; TO: STRING) is
+   begin
+     A.BDY(0) := CHARACTER'VAL(TO'LENGTH);
+     A.BDY(1 .. TO'LENGTH) := ZSTRING(TO);
+   end;
+
+   procedure SET(A: out PNAME; TO: CHARACTER) is
+   begin
+     A.BDY(0) := CHARACTER'VAL(1);
+     A.BDY(1) := TO;
+   end;
+
+   function LENGTH(A: PNAME) return NATURAL is
+   begin
+     return CHARACTER'POS(A.BDY(0));
+   end;
+
+   function TO_STRING(A: PNAME) return STRING is
+   begin
+     return STRING(A.BDY(1 .. CHARACTER'POS(A.BDY(0))));
+   end;
+
+   procedure PUT(ITEM: in PNAME) is
+   begin
+     TEXT2_IO.PUT(STRING(ITEM.BDY(1 .. CHARACTER'POS(ITEM.BDY(0)))));
+   end;
+
+   procedure PUT_LINE(ITEM: in PNAME) is
+   begin
+     TEXT2_IO.PUT_LINE(STRING(ITEM.BDY(1 .. CHARACTER'POS(ITEM.BDY(0)))));
+   end;
+
+   function "&" (LEFT: PNAME    ; RIGHT: PNAME    ) return STRING is
+   begin
+     return STANDARD."&"(STRING(LEFT.BDY(1..CHARACTER'POS(LEFT.BDY(0)))),
+			 STRING(RIGHT.BDY(1..CHARACTER'POS(RIGHT.BDY(0)))) );
+   end;
+
+   function "&" (LEFT: PNAME    ; RIGHT: STRING   ) return STRING is
+   begin
+     return STANDARD."&"(STRING(LEFT.BDY(1..CHARACTER'POS(LEFT.BDY(0))))
+			 , RIGHT);
+   end;
+
+   function "&" (LEFT: STRING   ; RIGHT: PNAME    ) return STRING is
+   begin
+     return STANDARD."&"(LEFT,
+			 STRING(RIGHT.BDY(1..CHARACTER'POS(RIGHT.BDY(0)))));
+   end;
+
+   function "&" (LEFT: PNAME    ; RIGHT: CHARACTER) return STRING is
+   begin
+     return STANDARD."&"(STRING(LEFT.BDY(1..CHARACTER'POS(LEFT.BDY(0))))
+			 , RIGHT);
+   end;
+
+   function "&" (LEFT: CHARACTER; RIGHT: PNAME    ) return STRING is
+   begin
+     return STANDARD."&"(LEFT,
+	 		 STRING(RIGHT.BDY(1..CHARACTER'POS(RIGHT.BDY(0)))));
+   end;
+
+   function "="(LEFT, RIGHT: PNAME) return BOOLEAN is
+     LEFT_LEN: constant INTEGER := CHARACTER'POS(LEFT.BDY(0));
+     RIGHT_LEN: constant INTEGER := CHARACTER'POS(RIGHT.BDY(0));
+   begin
+     return STANDARD."="(INTEGER(LEFT_LEN), INTEGER(RIGHT_LEN))
+     and then "="(LEFT.BDY(1..INTEGER(LEFT_LEN)),
+	 	  RIGHT.BDY(1..INTEGER(LEFT_LEN)) );
+   end;
+
+   function IS_EQUAL(LEFT: STRING; RIGHT: PNAME) return BOOLEAN is
+     RIGHT_LEN: constant INTEGER := CHARACTER'POS(RIGHT.BDY(0));
+   begin
+     return LEFT'LENGTH = RIGHT_LEN
+     and then LEFT = STRING(RIGHT.BDY(1 .. LEFT'LENGTH));
+   end;
+
+   function IS_EQUAL(LEFT: PNAME; RIGHT: STRING) return BOOLEAN is
+     LEFT_LEN: constant INTEGER := CHARACTER'POS(LEFT.BDY(0));
+   begin
+     return LEFT_LEN = RIGHT'LENGTH
+     and then STRING(LEFT.BDY(1 .. RIGHT'LENGTH)) = RIGHT;
+   end;
+
+   procedure QUIT(MSG: STRING) is
+   begin
+     TEXT2_IO.NEW_LINE;
+     TEXT2_IO.PUT("*** ABORTING *** ");
+     TEXT2_IO.PUT_LINE(MSG);
+     raise PROGRAM_ERROR;
+   end;
+
+end USERPK;

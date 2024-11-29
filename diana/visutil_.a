@@ -1,0 +1,37 @@
+with USERPK; use USERPK;
+with DIANAMAN; use DIANAMAN;
+with SETUTIL; use SETUTIL;
+
+package VISUTIL is
+
+    type PARAM_CURSOR_TYPE is
+	record
+	    PARAM_LIST:		SEQ_TYPE;
+	    PARAM:		TREE;
+	    ID_LIST:		SEQ_TYPE;
+	    ID:			TREE;
+	end record;
+
+    --- $$$$ temporary $$$$$$$$$$$$$$
+    function IS_OVERLOADABLE_HEADER(HEADER: TREE) return BOOLEAN; -- $$$$$
+
+    procedure FIND_VISIBILITY(EXP: TREE; DEFSET: out DEFSET_TYPE);
+    procedure FIND_DIRECT_VISIBILITY(ID: TREE; DEFSET: out DEFSET_TYPE);
+    procedure FIND_SELECTED_VISIBILITY(SELECTED: TREE; DEFSET: out DEFSET_TYPE);
+
+    function GET_ENCLOSING_DEF(USED_NAME: TREE; DEFSET: DEFSET_TYPE)
+		return TREE;
+    function MAKE_USED_NAME_ID_FROM_OBJECT(USED_OBJECT_ID: TREE) return TREE;
+    function MAKE_USED_OP_FROM_STRING(STRING_NODE: TREE) return TREE;
+    function EXPRESSION_TYPE_OF_DEF(DEF: TREE) return TREE;
+    function ALL_PARAMETERS_HAVE_DEFAULTS(HEADER: TREE) return BOOLEAN;
+    function CAST_TREE (ARG: SEQ_TYPE) return TREE;
+    function CAST_SEQ_TYPE (ARG: TREE) return SEQ_TYPE;
+    function NODE_REP (NODE: TREE) return STRING;
+    function COPY_NODE (NODE: TREE) return TREE;
+    procedure INIT_PARAM_CURSOR
+		( CURSOR:		out PARAM_CURSOR_TYPE
+		; PARAM_LIST: 		SEQ_TYPE);
+    procedure ADVANCE_PARAM_CURSOR(CURSOR: in out PARAM_CURSOR_TYPE);
+
+end VISUTIL;

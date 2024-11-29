@@ -1,0 +1,159 @@
+with USERPK, DIANA, DIANATTR, DIANAMAN, GRMRTBL, GRMROPS;
+use  USERPK, DIANA, DIANATTR, DIANAMAN, GRMRTBL, GRMROPS;
+with TEXT2_IO;
+procedure LOADGRMR is
+
+  package SEQ_IO renames GRMRTBL.GRMRTBL_IO;
+
+  USER_ROOT:	TREE;
+
+  procedure MAIN;
+  procedure READ_PARSE_TABLES;
+  procedure WRITE_BINARY;
+
+  procedure MAIN is
+    DUMMY: TREE;
+    -- TEXT:  STRING(1..3) := "'?'";
+  begin
+    CREATE_DIANA;
+    USER_ROOT := MAKE(DN_USER_ROOT);
+    D(XD_USER_ROOT, CONST_ROOT, USER_ROOT);
+
+    READ_PARSE_TABLES;
+
+    -- -- force symbol table entries for characters
+    -- for CH in ' ' .. CHARACTER'VAL(126) loop
+    --   TEXT (2) := CH;
+    --   DUMMY := STORESYM(TEXT);
+    -- end loop;
+
+    -- force symbol for predefined address
+    DUMMY := storesym("_ADDRESS");
+
+    CLOSE_DIANA;
+
+    WRITE_BINARY;
+  end MAIN;
+
+  procedure READ_PARSE_TABLES is
+    use TEXT2_IO;
+    PTFILE:	FILE_TYPE;
+    PTCHAR:	CHARACTER;
+    PTINDEX:	INTEGER;
+
+    LAST: NATURAL;
+
+    NTER_TEXT:	STRING(1 .. MAX_STRING);
+    NTER_TXTREP:TREE;
+
+    STRING_SEEN: BOOLEAN; -- string read by get_line
+
+    procedure STORE_ACTION is
+      ACTION:  INTEGER;
+      ACTION_OP:  GRMR_OP;
+      TXT:  STRING(1 .. 10);
+      LAST: INTEGER;
+      SYM: TREE;
+    begin
+      STRING_SEEN := FALSE;
+      AC_TBL_LAST := PTINDEX;
+      GET(PTFILE, ACTION);
+--@   PUT(integer(AC_TBL(PTINDEX)));
+      if ACTION < 0 then
+	AC_TBL(PTINDEX) := short(ACTION);
+      else
+        ACTION_OP := GRMR_OP'VAL(ACTION / 1000);
+	if ACTION_OP not in GRMR_OP_QUOTE then
+	  AC_TBL(PTINDEX) := short(ACTION);
+	else
+	  GET_LINE(PTFILE,TXT,LAST);
+	  SYM := STORESYM(TXT(1 .. LAST));
+	  AC_TBL(PTINDEX) := short(ACTION + INTEGER(SYM.TPG));
+	  AC_TBL_LAST := AC_TBL_LAST + 1;
+	  AC_TBL(AC_TBL_LAST) := short(SYM.TLN);
+	  STRING_SEEN := TRUE;
+	end if;
+      end if;
+    end STORE_ACTION;
+
+    procedure GET(FYLE: FILE_TYPE; V: out BYTE) is
+      VI:	INTEGER;
+    begin
+      GET(FYLE, VI);
+      V := BYTE(VI);
+    end GET;
+
+  begin
+    OPEN(PTFILE, IN_FILE, "PARSE.TBL");
+    while not END_OF_FILE(PTFILE) loop
+      GET(PTFILE, PTCHAR);
+      GET(PTFILE, PTINDEX);
+      if PTCHAR = 'S' then
+	PUT(PTCHAR);
+	PUT(PTINDEX);
+	ST_TBL_LAST := PTINDEX;
+	GET(PTFILE, ST_TBL(PTINDEX));
+	PUT(ST_TBL(PTINDEX));NEW_LINE;
+      elsif PTCHAR = 'T' then
+--@	PUT(PTCHAR);
+--@	PUT(PTINDEX);
+	AC_SYM_LAST := PTINDEX;
+	STORE_ACTION;
+	GET(PTFILE, AC_SYM(PTINDEX));
+--@	PUT(INTEGER(AC_SYM(PTINDEX)));
+--@	NEW_LINE;
+	SKIP_LINE(PTFILE);
+      elsif PTCHAR = 'A' then
+	STORE_ACTION;
+--@	NEW_LINE;
+	if not STRING_SEEN then
+	  SKIP_LINE(PTFILE);
+	end if;
+      elsif PTCHAR = 'N' then
+	PUT(PTCHAR);
+	PUT(PTINDEX);
+	NTER_LAST := PTINDEX;
+	GET(PTFILE,PTCHAR); -- Skip the space
+	GET_LINE(PTFILE, NTER_TEXT, LAST);
+        PUT(' ');PUT_LINE(NTER_TEXT(1 .. LAST));
+	NTER_TXTREP := STORETEXT(NTER_TEXT(1 .. LAST));
+	NTER_PG(PTINDEX) := BYTE(NTER_TXTREP.TPG);
+	NTER_LN(PTINDEX) := NTER_TXTREP.TLN;
+      else
+	PUT(PTCHAR);
+	PUT(PTINDEX);
+	PUT_LINE("*****Table Error");
+	raise ASSERTION_ERROR;
+      end if;
+    end loop;
+    CLOSE(PTFILE);
+    PUT_LINE("Parse tables read.");
+  end READ_PARSE_TABLES;
+
+  procedure WRITE_BINARY is
+    use SEQ_IO;
+    BIN_FILE:	SEQ_IO.FILE_TYPE; -- Binary Grammar File
+    GRMR_DATA: constant GRMRTBL_RECORD
+      := (ST_TBL,
+          ST_TBL_LAST,
+          AC_SYM,
+          AC_TBL,
+          AC_SYM_LAST,
+          AC_TBL_LAST,
+          NTER_PG,
+          NTER_LN,
+          NTER_LAST);
+
+  begin
+
+    CREATE(BIN_FILE, SEQ_IO.OUT_FILE, "PARSE.BIN");
+    WRITE(BIN_FILE, GRMR_DATA);
+    CLOSE(BIN_FILE);
+
+  end WRITE_BINARY;
+
+begin
+  TEXT2_IO.PUT_LINE("Begin LOADGRMR.");
+  MAIN;
+  TEXT2_IO.PUT_LINE("End LOADGRMR.");
+end LOADGRMR;

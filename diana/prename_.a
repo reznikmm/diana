@@ -1,0 +1,113 @@
+with USERPK; use USERPK;
+with DIANAMAN; use DIANAMAN;
+
+package PRENAME is
+
+  type DEFINED_PRAGMAS is
+    ( CONTROLLED,
+      ELABORATE,
+      INLINE,
+      INTERFACE,
+      LIST,
+      MEMORY_SIZE,
+      OPTIMIZE,
+      PACK,
+      PAGE,
+      PRIORITY,
+      SHARED,
+      STORAGE_UNIT,
+      SUPPRESS,
+      SYSTEM_NAME,
+
+      DEBUG );  -- DEBUG(ON|OFF) -- enables/disables trace in compiler
+
+  type LIST_ARGUMENTS is (OFF, ON);
+
+  type OPTIMIZE_ARGUMENTS is (TIME, SPACE);
+
+  type SUPPRESS_ARGUMENTS is (ON,
+	ACCESS_CHECK,	INDEX_CHECK,	DISCRIMINANT_CHECK,
+	LENGTH_CHECK,	RANGE_CHECK,	ELABORATION_CHECK,
+	DIVISION_CHECK, OVERFLOW_CHECK, STORAGE_CHECK);
+
+  type INTERFACE_ARGUMENTS is (HOSTADA);
+
+  type DEFINED_ATTRIBUTES is
+       ( ADDRESS,	     AFT,		 BASE,
+	 CALLABLE,	     CONSTRAINED,	 COUNT,
+	 DELTA_X,	     DIGITS_X,		 EMAX,
+	 EPSILON,	     FIRST,		 FIRST_BIT,
+	 FORE,		     IMAGE,		 LARGE,
+	 LAST,		     LAST_BIT,		 LENGTH,
+	 MACHINE_EMAX,		     MACHINE_EMIN,
+	 MACHINE_MANTISSA,	     MACHINE_OVERFLOWS,
+	 MACHINE_RADIX, 	     MACHINE_ROUNDS,
+	 MANTISSA,	     POS,		 POSITION,
+	 PRED,		     RANGE_X,		 SAFE_EMAX,
+	 SAFE_LARGE,	     SAFE_SMALL,	 SIZE,
+	 SMALL, 	     STORAGE_SIZE,	 SUCC,
+	 TERMINATED,	     VAL,		 VALUE,
+	 WIDTH );
+
+    type OP_CLASS is
+	( op_and -- and
+	, op_or -- or
+	, op_xor -- xor
+	, op_not -- not
+	, op_unary_plus -- +
+	, op_unary_minus -- -
+	, op_abs -- abs
+	, op_eq -- =
+	, op_ne -- /=
+	, op_lt -- <
+	, op_le -- <=
+	, op_gt -- >
+	, op_ge -- >=
+	, op_plus -- +
+	, op_minus -- -
+	, op_mult -- *
+	, op_div -- /
+	, op_mod -- mod
+	, op_rem -- rem
+	, op_cat -- &
+	, op_exp ); -- **
+
+    subtype class_boolean_op is op_class range op_and .. op_xor;
+    subtype class_equality_op is op_class range op_eq .. op_ne;
+    subtype class_relational_op is op_class range op_lt .. op_ge;
+    subtype class_eq_relational_op is op_class range op_eq .. op_ge;
+
+    subtype class_unary_op is op_class range op_not .. op_abs;
+    subtype class_unary_numeric_op is op_class range op_unary_plus .. op_abs;
+    subtype class_fixed_op is op_class range op_plus .. op_minus;
+    subtype class_float_op is op_class range op_plus .. op_div;
+    subtype class_integer_op is op_class range op_plus .. op_rem;
+
+    subtype string_3 is string(1..3);
+
+    bltn_text_array: constant array (op_class) of string_3 :=
+	        ( op_and => "AND"
+	        , op_or => "OR!"
+	        , op_xor => "XOR"
+	        , op_eq => "=!!"
+	        , op_ne => "/=!"
+	        , op_lt => "<!!"
+	        , op_le => "<=!"
+	        , op_gt => ">!!"
+	        , op_ge => ">=!"
+	        , op_plus => "+!!"
+	        , op_minus => "-!!"
+	        , op_cat => "&!!"
+	        , op_unary_plus => "+!!"
+	        , op_unary_minus => "-!!"
+	        , op_abs => "ABS"
+	        , op_not => "NOT"
+	        , op_mult => "*!!"
+	        , op_div => "/!!"
+	        , op_mod => "MOD"
+	        , op_rem => "REM"
+	        , op_exp => "**!" );
+
+    bltn_id_array: array (op_class) of tree := (others => const_void);
+
+end PRENAME;

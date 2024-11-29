@@ -1,0 +1,10 @@
+with USERPK; use USERPK;
+package CHKSTAT is
+
+    function IS_STATIC_RANGE(A: TREE) return BOOLEAN;
+    function IS_STATIC_SUBTYPE(A: TREE) return BOOLEAN;
+    function IS_STATIC_DISCRETE_RANGE(A: TREE) return BOOLEAN;
+    function IS_STATIC_INDEX_CONSTRAINT(ARRAY_TYPE, INDEX_CONSTRAINT: TREE)
+	    return BOOLEAN;
+    -- function is_static_discriminant_constraint ... (not used)
+end CHKSTAT;

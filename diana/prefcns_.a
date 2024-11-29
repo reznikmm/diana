@@ -1,0 +1,5 @@
+with USERPK; use USERPK;
+with SEMGLOB; use SEMGLOB;
+package PREFCNS is
+    procedure GEN_PREDEFINED_OPERATORS(TYPE_SPEC: TREE; H_IN: H_TYPE);
+end PREFCNS;

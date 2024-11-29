@@ -1,0 +1,430 @@
+with TEXT2_IO; use TEXT2_IO;
+with USERPK; use USERPK;
+with DIANA, DIANATTR, DIANAMAN; use DIANA, DIANATTR, DIANAMAN;
+with SEMGLOB; use SEMGLOB;
+with FIXWITH;
+with DEFUTIL; use DEFUTIL;
+with NODWALK; use NODWALK;
+with VISUTIL; use VISUTIL;
+
+procedure SEMPHASE is
+    -- semantic phase for Ada front end
+
+    used_package_list: seq_type renames fixwith.used_package_list;
+
+    procedure MAIN;
+    procedure COMPILE_COMPILATION_UNIT(COMPILATION_UNIT: TREE; H: H_TYPE);
+    procedure CANCEL_TRANS_WITHS(COMPILATION_UNIT: TREE);
+    procedure ENTER_ANCESTOR_REGION(NAME: TREE; H: in out H_TYPE);
+    procedure PROCESS_CONTEXT_CLAUSES(COMPILATION_UNIT: TREE);
+    procedure WALK_ITEM(ITEM: TREE; H_IN: H_TYPE);
+    procedure PROCESS_WITH_NAME_S(NAME_S: TREE);
+    procedure PROCESS_WITH_USE_PRAGMA_S(USE_PRAGMA_S: TREE);
+    procedure PROCESS_ANCESTOR_CONTEXT(ANCESTOR_UNIT, COMPILATION_UNIT: TREE);
+    function IS_ANCESTOR(ANC_ALL_DECL, COMP_ALL_DECL: TREE) return BOOLEAN;
+    procedure REPROCESS_CONTEXT(CONTEXT_ELEM_S: TREE);
+    procedure INITIALIZE_PRAGMA_ATTRIBUTE_DEFS;
+
+    ------------------------------------------------------------------------
+    ------------------------------------------------------------------------
+
+    procedure MAIN is
+	USER_ROOT:		TREE := D(XD_USER_ROOT, CONST_ROOT);
+	COMPILATION:		TREE := D(XD_STRUCTURE, USER_ROOT);
+	COMPLTN_UNIT_LIST:	SEQ_TYPE
+		:= LIST(D(AS_COMPLTN_UNIT_S, COMPILATION));
+	COMPILATION_UNIT:	TREE;
+    begin
+	INITIALIZE_GLOBAL_DATA;
+	INITIALIZE_PRAGMA_ATTRIBUTE_DEFS;
+
+	while not IS_EMPTY(COMPLTN_UNIT_LIST) loop
+	    POP(COMPLTN_UNIT_LIST, COMPILATION_UNIT);
+	    COMPILE_COMPILATION_UNIT(COMPILATION_UNIT, INITIAL_H);
+	    if not IS_EMPTY(COMPLTN_UNIT_LIST) then
+		CANCEL_TRANS_WITHS(COMPILATION_UNIT);
+	    end if;
+	end loop;
+    end MAIN;
+
+    ------------------------------------------------------------------------
+
+    procedure CANCEL_TRANS_WITHS(COMPILATION_UNIT: TREE) is
+	-- make invisible trans_with defs prior to additional compilation unit
+	TRANS_WITH_LIST:	SEQ_TYPE := LIST(COMPILATION_UNIT);
+	TRANS_WITH:		TREE;
+	ALL_DECL:		TREE;
+	UNIT_ID:		TREE;
+    begin
+	while not IS_EMPTY(TRANS_WITH_LIST) loop
+	    POP(TRANS_WITH_LIST, TRANS_WITH);
+	    ALL_DECL := D(AS_ALL_DECL, D(TW_COMP_UNIT, TRANS_WITH));
+	    if KIND(ALL_DECL) /= DN_SUBUNIT then
+		UNIT_ID := D(AS_SOURCE_NAME, ALL_DECL);
+		if KIND(UNIT_ID) in CLASS_UNIT_NAME
+		and then D(SM_FIRST, UNIT_ID) = UNIT_ID then
+		    REMOVE_DEF_FROM_ENVIRONMENT (GET_DEF_FOR_ID(UNIT_ID));
+		end if;
+	    else
+		UNIT_ID := D(SM_FIRST, D(AS_SOURCE_NAME, D(AS_SUBUNIT_BODY
+			, ALL_DECL )));
+		REMOVE_DEF_FROM_ENVIRONMENT (GET_DEF_FOR_ID(UNIT_ID));
+	    end if;
+	end loop;
+	REMOVE_DEF_FROM_ENVIRONMENT(PREDEFINED_STANDARD_DEF);
+    end CANCEL_TRANS_WITHS;
+
+    ------------------------------------------------------------------------
+
+    procedure COMPILE_COMPILATION_UNIT(COMPILATION_UNIT: TREE; H: H_TYPE) is
+	CONTEXT_ELEM_S: constant TREE := D(AS_CONTEXT_ELEM_S, COMPILATION_UNIT);
+	ALL_DECL:	constant TREE := D(AS_ALL_DECL, COMPILATION_UNIT);
+	PRAGMA_S:	constant TREE := D(AS_PRAGMA_S, COMPILATION_UNIT);
+	WITH_LIST:	constant SEQ_TYPE := LIST(COMPILATION_UNIT);
+    begin
+	if KIND(ALL_DECL) = DN_VOID then
+	    ERROR(D(LX_SRCPOS, COMPILATION_UNIT)
+                        , "$$$ empty unit not implemented yet");
+	    return;
+	end if;
+
+	USED_PACKAGE_LIST := MAKE;
+	FIXWITH.FIX_WITH_CLAUSES(COMPILATION_UNIT);
+	INITIALIZE_PREDEFINED_TYPES;
+
+	PROCESS_CONTEXT_CLAUSES(COMPILATION_UNIT);
+
+	declare
+	    H: H_TYPE := INITIAL_H;
+	    ADDRESS_DEFLIST: SEQ_TYPE;
+	    ADDRESS_DEF: TREE;
+	begin
+	    ---- get predefined address, if predefined system was withed
+	    --PREDEFINED_ADDRESS := CONST_VOID;
+            --ADDRESS_DEFLIST := LIST(STORESYM("_ADDRESS"));
+	    --while not IS_EMPTY(ADDRESS_DEFLIST) loop
+	    --	  POP(ADDRESS_DEFLIST, ADDRESS_DEF);
+	    --	  if D(XD_REGION_DEF,D(XD_REGION_DEF,ADDRESS_DEF))
+	    --		      = PREDEFINED_STANDARD_DEF
+	    --	  then
+	    --	      PREDEFINED_ADDRESS
+	    --		      := D(SM_TYPE_SPEC,D(XD_SOURCE_NAME,ADDRESS_DEF));
+	    --	      exit;
+	    --	  end if;
+	    --end loop;
+
+	    H.REGION_DEF := PREDEFINED_STANDARD_DEF;
+	    H.LEX_LEVEL := 2;
+	    H.IS_IN_SPEC := TRUE;
+	    H.IS_IN_BODY := FALSE;
+	    if KIND(ALL_DECL) = DN_SUBUNIT then
+		ENTER_ANCESTOR_REGION(D(AS_NAME, ALL_DECL), H);
+		WALK_ITEM(D(AS_SUBUNIT_BODY, ALL_DECL), H);
+	    else
+		WALK_ITEM(ALL_DECL, H);
+	    end if;
+
+	    WALK_ITEM_S(PRAGMA_S, H);
+
+	    while not IS_EMPTY(USED_PACKAGE_LIST) loop
+		DB(XD_IS_USED, HEAD(USED_PACKAGE_LIST), FALSE);
+		USED_PACKAGE_LIST := TAIL(USED_PACKAGE_LIST);
+	    end loop;
+	end;
+
+    end COMPILE_COMPILATION_UNIT;
+
+    ------------------------------------------------------------------------
+
+    procedure ENTER_ANCESTOR_REGION(NAME: TREE; H: in out H_TYPE) is
+	S: S_TYPE;
+	DESIGNATOR: TREE;
+	DEFN: TREE;
+	DES_DEF: TREE;
+	DEFLIST: SEQ_TYPE;
+	DEF: TREE;
+    begin
+	if KIND(NAME) = DN_SELECTED then
+	    ENTER_ANCESTOR_REGION(D(AS_NAME, NAME), H);
+	    DESIGNATOR := D(AS_DESIGNATOR, NAME);
+	else
+	    DESIGNATOR := NAME;
+	end if;
+	D(SM_DEFN, DESIGNATOR, CONST_VOID);
+	DEFLIST := LIST(D(LX_SYMREP, DESIGNATOR));
+	while not IS_EMPTY(DEFLIST) loop
+	    POP(DEFLIST, DEF);
+	    if D(XD_REGION, D(XD_SOURCE_NAME, DEF))
+		    = D(XD_SOURCE_NAME, H.REGION_DEF)
+	    then
+		DEFN := D(XD_SOURCE_NAME, DEF);
+		if KIND(DEFN) = DN_TYPE_ID
+		or else KIND(DEFN) in CLASS_UNIT_NAME then
+		    DEFN := D(SM_FIRST, DEFN);
+		end if;
+		D(SM_DEFN, DESIGNATOR, DEFN);
+		exit;
+	    end if;
+	end loop;
+	DEFN := D(SM_DEFN, DESIGNATOR);
+	if DEFN = CONST_VOID then
+            QUIT("Defn not found for ancestor");
+	end if;
+	DES_DEF := GET_DEF_FOR_ID(DEFN);
+	D(XD_REGION_DEF, DES_DEF, H.REGION_DEF);
+	ENTER_BODY(DES_DEF, H, S);
+    end ENTER_ANCESTOR_REGION;
+
+    ------------------------------------------------------------------------
+
+    procedure PROCESS_CONTEXT_CLAUSES(COMPILATION_UNIT: TREE) is
+	CONTEXT_ELEM_S: 	constant TREE
+		:= D(AS_CONTEXT_ELEM_S, COMPILATION_UNIT);
+	CONTEXT_ELEM_LIST:	SEQ_TYPE := LIST(CONTEXT_ELEM_S);
+	CONTEXT_ELEM:		TREE;
+
+	TRANS_WITH_LIST:	SEQ_TYPE := LIST(COMPILATION_UNIT);
+	TRANS_WITH:		TREE;
+    begin
+        PUT_LINE("process_context_clauses");
+	-- for each context_elem
+	while not IS_EMPTY(CONTEXT_ELEM_LIST) loop
+	    POP(CONTEXT_ELEM_LIST, CONTEXT_ELEM);
+
+	    -- if it is a with clause
+	    if KIND(CONTEXT_ELEM) = DN_WITH then
+
+		-- then process the with list and the use list
+		PROCESS_WITH_NAME_S(D(AS_NAME_S, CONTEXT_ELEM));
+		PROCESS_WITH_USE_PRAGMA_S(D(AS_USE_PRAGMA_S, CONTEXT_ELEM));
+
+	    else
+		-- else it must be a pragma
+                -- $$$$ it really shouldn't be, as never get context_pragma
+                QUIT("$$$$ Context pragma.");
+	    end if;
+	end loop;
+
+	-- now deal with ancestor clauses
+	while not IS_EMPTY(TRANS_WITH_LIST) loop
+	    POP(TRANS_WITH_LIST, TRANS_WITH);
+	    PROCESS_ANCESTOR_CONTEXT
+			( D(TW_COMP_UNIT,TRANS_WITH)
+			, COMPILATION_UNIT );
+	end loop;
+
+        PUT_LINE("end process_context_clauses");
+    end PROCESS_CONTEXT_CLAUSES;
+
+    ------------------------------------------------------------------------
+
+    procedure PROCESS_WITH_NAME_S(NAME_S: TREE) is
+	-- process with clauses in context clause
+        -- note that sm_defn's have been set up in library phase
+	NAME_LIST:	SEQ_TYPE := LIST(NAME_S);
+	NAME:		TREE;
+	NEW_NAME_LIST:	SEQ_TYPE := MAKE;
+	NEW_NAME:	TREE;
+	NAME_DEFN:	TREE;
+	NAME_DEF:	TREE;
+    begin
+	-- for each with identifier
+	while not IS_EMPTY(NAME_LIST) loop
+	    POP(NAME_LIST, NAME);
+
+	    -- find corresponding def
+
+	    NAME_DEFN := D(SM_DEFN, NAME);
+	    NAME_DEF := GET_DEF_FOR_ID(NAME_DEFN);
+
+	    -- make it withed
+	    D(XD_REGION_DEF, NAME_DEF
+			, GET_DEF_FOR_ID(D(XD_REGION, NAME_DEFN)) );
+
+	    -- replace used_object_id with used_name_id
+	    NEW_NAME := MAKE_USED_NAME_ID_FROM_OBJECT(NAME);
+	    NEW_NAME_LIST := APPEND(NEW_NAME_LIST, NEW_NAME);
+	end loop;
+
+        -- save new list of used_name_id's
+	LIST(NAME_S, NEW_NAME_LIST);
+    end PROCESS_WITH_NAME_S;
+
+    ------------------------------------------------------------------------
+
+    procedure PROCESS_WITH_USE_PRAGMA_S(USE_PRAGMA_S: TREE) is
+	-- modify defs for use clauses in context clause
+        -- note that sm_defn's have been set up in library phase
+	USE_PRAGMA_LIST:	SEQ_TYPE := LIST(USE_PRAGMA_S);
+	USE_PRAGMA:		TREE;
+	NAME_LIST:		SEQ_TYPE;
+	NAME:			TREE;
+	NEW_NAME_LIST:		SEQ_TYPE;
+	NEW_NAME:		TREE;
+	NAME_DEFN:		TREE;
+	NAME_DEF:		TREE;
+    begin
+	-- for each use clause or pragma
+	while not IS_EMPTY(USE_PRAGMA_LIST) loop
+	    POP(USE_PRAGMA_LIST, USE_PRAGMA);
+
+	    -- if it is a pragma
+	    if KIND(USE_PRAGMA) = DN_PRAGMA then
+
+		-- then process the pragma
+		WALK(USE_PRAGMA, INITIAL_H);
+
+	    else
+
+		-- else for each name in the use clause
+		NAME_LIST := LIST(D(AS_NAME_S, USE_PRAGMA));
+		NEW_NAME_LIST := MAKE;
+		while not IS_EMPTY(NAME_LIST) loop
+		    POP(NAME_LIST, NAME);
+
+		    -- find corresponding def
+		    NAME_DEFN := D(SM_DEFN, NAME);
+		    NAME_DEF := GET_DEF_FOR_ID(NAME_DEFN);
+
+		    -- make it used
+		    DB(XD_IS_USED, NAME_DEF, TRUE);
+
+		    -- replace used_object_id with used_name_id
+		    NEW_NAME := MAKE_USED_NAME_ID_FROM_OBJECT(NAME);
+		    NEW_NAME_LIST := APPEND(NEW_NAME_LIST, NEW_NAME);
+		end loop;
+
+                -- save new list of used_name_id's
+		LIST(D(AS_NAME_S, USE_PRAGMA), NEW_NAME_LIST);
+	    end if;
+	end loop;
+    end PROCESS_WITH_USE_PRAGMA_S;
+
+    ------------------------------------------------------------------------
+
+    procedure PROCESS_ANCESTOR_CONTEXT(ANCESTOR_UNIT, COMPILATION_UNIT: TREE) is
+    begin
+	if IS_ANCESTOR
+		( D(AS_ALL_DECL,ANCESTOR_UNIT)
+		, D(AS_ALL_DECL,COMPILATION_UNIT) )
+	then
+	    REPROCESS_CONTEXT(D(AS_CONTEXT_ELEM_S, ANCESTOR_UNIT));
+	end if;
+    end PROCESS_ANCESTOR_CONTEXT;
+
+    ------------------------------------------------------------------------
+
+    function IS_ANCESTOR(ANC_ALL_DECL, COMP_ALL_DECL: TREE) return BOOLEAN is
+    begin
+	if KIND(COMP_ALL_DECL) in CLASS_SUBUNIT_BODY then
+	    return ( KIND(ANC_ALL_DECL) in CLASS_UNIT_DECL
+		    and then D(SM_FIRST,D(AS_SOURCE_NAME,COMP_ALL_DECL))
+			    = D(AS_SOURCE_NAME, ANC_ALL_DECL) );
+	elsif KIND(COMP_ALL_DECL) = DN_SUBUNIT then
+	    declare
+		COMP_NAME: TREE := D(AS_NAME, COMP_ALL_DECL);
+		ANC_ID: TREE := CONST_VOID;
+	    begin
+		if KIND(ANC_ALL_DECL) = DN_SUBUNIT then
+		    ANC_ID := D(SM_FIRST
+			   , D(AS_SOURCE_NAME,D(AS_SUBUNIT_BODY,ANC_ALL_DECL)));
+		    return FIXWITH.IS_ANCESTOR(ANC_ID, COMP_ALL_DECL);
+		elsif ANC_ALL_DECL /= CONST_VOID then
+		    ANC_ID := D(SM_FIRST, D(AS_SOURCE_NAME, ANC_ALL_DECL));
+		    while KIND(COMP_NAME) = DN_SELECTED loop
+			COMP_NAME := D(AS_NAME, COMP_NAME);
+		    end loop;
+		    return D(LX_SYMREP, ANC_ID) = D(LX_SYMREP, COMP_NAME);
+		end if;
+	    end;
+	else
+	    return FALSE;
+	end if;
+    end IS_ANCESTOR;
+
+    ------------------------------------------------------------------------
+
+    procedure REPROCESS_CONTEXT(CONTEXT_ELEM_S: TREE) is
+	-- given context_elem_s for an ancestor unit,
+        -- ... reprocess with's and use's in for use in current unit
+	CONTEXT_ELEM_LIST: SEQ_TYPE := LIST(CONTEXT_ELEM_S);
+	CONTEXT_ELEM: TREE;
+	USE_PRAGMA_LIST: SEQ_TYPE;
+	USE_PRAGMA: TREE;
+	ITEM_LIST: SEQ_TYPE;
+	ITEM: TREE;
+    begin
+	while not IS_EMPTY(CONTEXT_ELEM_LIST) loop
+	    POP(CONTEXT_ELEM_LIST, CONTEXT_ELEM);
+	    if KIND(CONTEXT_ELEM) = DN_WITH then
+		ITEM_LIST := LIST(D(AS_NAME_S,CONTEXT_ELEM));
+		while not IS_EMPTY(ITEM_LIST) loop
+		    POP(ITEM_LIST, ITEM);
+		    if D(SM_DEFN,ITEM) /= CONST_VOID then
+			D(XD_REGION_DEF
+				, GET_DEF_FOR_ID(D(SM_DEFN,ITEM))
+				, PREDEFINED_STANDARD_DEF );
+		    end if;
+		end loop;
+		USE_PRAGMA_LIST := LIST(D(AS_USE_PRAGMA_S,CONTEXT_ELEM));
+		while not IS_EMPTY(USE_PRAGMA_LIST) loop
+		    POP(USE_PRAGMA_LIST, USE_PRAGMA);
+		    if KIND(USE_PRAGMA) = DN_USE then
+			ITEM_LIST := LIST(D(AS_NAME_S, USE_PRAGMA));
+			while not IS_EMPTY(ITEM_LIST) loop
+			    POP(ITEM_LIST, ITEM);
+			    if D(SM_DEFN, ITEM) /= CONST_VOID then
+				DB(XD_IS_USED
+					, GET_DEF_FOR_ID(D(SM_DEFN,ITEM))
+					, TRUE );
+			    end if;
+			end loop;
+		    end if;
+		end loop;
+	    end if;
+	end loop;
+    end REPROCESS_CONTEXT;
+
+    ------------------------------------------------------------------------
+    ------------------------------------------------------------------------
+    ------------------------------------------------------------------------
+
+    procedure WALK_ITEM(ITEM: TREE; H_IN: H_TYPE) is
+	H: H_TYPE := H_IN;
+    begin
+        PUT_LINE("WALK_ITEM");
+	WALK(ITEM, H);
+        PUT_LINE("end WALK_ITEM");
+    end WALK_ITEM;
+
+    ------------------------------------------------------------------------
+
+    procedure INITIALIZE_PRAGMA_ATTRIBUTE_DEFS is
+        PREDEF_UNIT: TREE := HEAD(LIST(STORESYM("_STANDRD.DCL")));
+	PREDEF_HEADER: TREE := D(AS_HEADER, D(AS_ALL_DECL,PREDEF_UNIT));
+	ID_LIST: SEQ_TYPE := LIST(D(AS_DECL_S2,PREDEF_HEADER));
+	ID: TREE;
+	DEF: TREE;
+    begin
+	while not IS_EMPTY(ID_LIST) loop
+	    POP(ID_LIST, ID);
+	    if KIND(ID) in DN_ATTRIBUTE_ID .. DN_PRAGMA_ID
+	    and then KIND(D(LX_SYMREP,ID)) = DN_SYMBOL_REP then
+		DEF := MAKE_DEF_FOR_ID(ID, INITIAL_H);
+		D(XD_REGION_DEF, DEF, CONST_VOID);
+		DB(XD_IS_IN_SPEC, DEF, FALSE);
+	    end if;
+	end loop;
+    end INITIALIZE_PRAGMA_ATTRIBUTE_DEFS;
+
+    ------------------------------------------------------------------------
+
+begin
+    OPEN_DIANA;
+    if DI(XD_ERR_COUNT, CONST_ROOT) > 0 then
+        PUT_LINE("Semphase: not executed");
+    else
+	MAIN;
+    end if;
+    CLOSE_DIANA;
+end SEMPHASE;

@@ -1,0 +1,567 @@
+with TEXT2_IO, PAGEMAN;
+use  TEXT2_IO, PAGEMAN;
+with SEQUENTIAL_IO;
+with DIANAMAN; use DIANAMAN; -- for ELABORATE
+pragma ELABORATE(DIANAMAN); -- for MAKE
+package body UNITLOD is
+
+  DEBUG_PRINT: constant BOOLEAN := FALSE;
+
+  CUR_TIMESTAMP:	INTEGER := -1;
+  LIB_INFO_SEQ: 	SEQ_TYPE := MAKE;
+  LIB_PREFIX:           PNAME; -- := ""
+
+  LOADED_UNIT_LIST:	SEQ_TYPE := MAKE; -- list of loaded units
+        -- used to go through loaded units and enter id's in
+	-- symbol table
+
+  UNITS_LOADED_LIST: SEQ_TYPE := MAKE; -- result for units_loaded
+  UNITS_WITHED_LIST: SEQ_TYPE := MAKE; -- result for units_loaded_and_withed
+  SAVED_WITHED_LIST: SEQ_TYPE := MAKE;
+
+  TRANS_WITH_SEQ:	SEQ_TYPE;
+  NEW_UNIT_LIST:	SEQ_TYPE; -- := MAKE;
+
+  procedure PUT_TREE(T: TREE);
+  function LOAD_NAMED_UNIT(PRI, SEC: STRING) return TREE;
+  procedure OPEN_LIBRARY;
+  function MAKE_FILE_SYM(PRI, SEC: STRING) return TREE;
+  function LOAD_UNIT(PRI,SEC: STRING) return TREE;
+  function LOAD_UNIT(FILESYM_ARG: TREE) return TREE;
+  procedure WITH_UNIT(UNIT: TREE);
+  procedure ENTER_USED_DEFINING_IDS;
+
+  --=========================================================================
+
+  function LOAD_LIBRARY_SPEC(LIB_NAME: STRING) return TREE is
+  begin
+    return LOAD_NAMED_UNIT(LIB_NAME, ".DCL");
+  end LOAD_LIBRARY_SPEC;
+
+  function LOAD_LIBRARY_BODY(LIB_NAME: STRING) return TREE is
+  begin
+    return LOAD_NAMED_UNIT(LIB_NAME, ".BDY");
+  end LOAD_LIBRARY_BODY;
+
+  function LOAD_LIBRARY_SUBUNIT(LIB_NAME, SUB_NAME: STRING) return TREE is
+  begin
+    return LOAD_NAMED_UNIT(LIB_NAME, SUB_NAME);
+  end;
+
+  function LOAD_LIBRARY_SPEC(LIB_SYM: TREE) return TREE is
+  begin
+    return LOAD_NAMED_UNIT(PRINTNAME(LIB_SYM), ".DCL");
+  end LOAD_LIBRARY_SPEC;
+
+  function LOAD_LIBRARY_BODY(LIB_SYM: TREE) return TREE is
+  begin
+    return LOAD_NAMED_UNIT(PRINTNAME(LIB_SYM), ".BDY");
+  end LOAD_LIBRARY_BODY;
+
+  function LOAD_LIBRARY_SUBUNIT(LIB_SYM, SUB_SYM: TREE) return TREE is
+  begin
+    return LOAD_NAMED_UNIT(PRINTNAME(LIB_SYM), PRINTNAME(SUB_SYM));
+  end LOAD_LIBRARY_SUBUNIT;
+
+  function UNITS_LOADED return SEQ_TYPE is
+  begin
+    return UNITS_LOADED_LIST;
+  end UNITS_LOADED;
+
+  function UNITS_LOADED_AND_WITHED return SEQ_TYPE is
+  begin
+    return UNITS_WITHED_LIST;
+  end UNITS_LOADED_AND_WITHED;
+
+  --=========================================================================
+
+  -- Debug routine @@@
+  procedure PUT_TREE(T: TREE) is
+  begin
+    PUT(INTEGER(T.TPG),0);
+    PUT('.');PUT(INTEGER(T.TTY),0);
+    PUT('.');PUT(INTEGER(T.TLN),0);
+  end PUT_TREE;
+
+  function MEMBER_OF_LIST(L: SEQ_TYPE; ITEM: TREE) return BOOLEAN is
+    L_TEMP: SEQ_TYPE := L;
+    L_ITEM: TREE;
+  begin
+    while not is_empty(L_TEMP) loop
+	POP(L_TEMP, L_ITEM);
+	if L_ITEM = ITEM then
+	    return TRUE;
+	end if;
+    end loop;
+    return FALSE;
+  end;
+
+  function LOAD_NAMED_UNIT(PRI, SEC: STRING) return TREE is
+    USER_ROOT:	    TREE := D(XD_USER_ROOT, CONST_ROOT);
+    UNIT: TREE;
+  begin
+
+    LOADED_UNIT_LIST := MAKE;
+
+    -- load library on first call
+    if CUR_TIMESTAMP < 0 then
+      if DEBUG_PRINT then
+          PUT_LINE("Open library.");
+      end if;
+      SET(LIB_PREFIX, TO => "");
+      OPEN_LIBRARY;
+      UNIT := LOAD_UNIT("_STANDRD",".DCL");
+    end if;
+
+    -- Note - manipulations for UNITS_WITHED_LIST to force correct order.
+    -- We are careful not to add to the list while loading withed units
+    -- as this would use up extra pages
+    SAVED_WITHED_LIST := UNITS_WITHED_LIST;
+    UNITS_WITHED_LIST := MAKE;
+    if SEC = ".BDY" then
+        UNIT := LOAD_UNIT(PRI, ".DCL");
+	if KIND(UNIT) = DN_SUBPROGRAM_BODY then
+	    LIST( MAKE_FILE_SYM(PRI,SEC)
+		    , SINGLETON(UNIT) );
+	elsif UNIT /= CONST_VOID then
+	    UNIT := LOAD_UNIT(PRI, SEC);
+	end if;
+    else
+	UNIT := LOAD_UNIT(PRI, SEC);
+    end if;
+    if IS_EMPTY(UNITS_WITHED_LIST) then
+	UNITS_WITHED_LIST := SAVED_WITHED_LIST;
+    elsif not IS_EMPTY(UNITS_WITHED_LIST) then
+	SAVED_WITHED_LIST := APPEND(SAVED_WITHED_LIST, UNITS_WITHED_LIST.H);
+	UNITS_WITHED_LIST := SAVED_WITHED_LIST;
+    end if;
+
+    if UNIT /= CONST_VOID then
+	if not MEMBER_OF_LIST(UNITS_LOADED_LIST, UNIT) then
+	    UNITS_LOADED_LIST := APPEND(UNITS_LOADED_LIST, UNIT);
+	end if;
+    end if;
+
+    ENTER_USED_DEFINING_IDS;
+
+    return UNIT;
+  end LOAD_NAMED_UNIT;
+
+
+  procedure OPEN_LIBRARY is
+    LIB_CTRL:		TEXT2_IO.FILE_TYPE;
+    LIB_CHAR:		CHARACTER;
+    DUMMY_CHAR: 	CHARACTER;
+    LIB_NUM:		INTEGER;
+    LIB_SHORT:		STRING(1 .. MAX_STRING);
+    LIB_TEXT_1: 	STRING(1 .. MAX_STRING);
+    LIB_TEXT_2: 	STRING(1 .. MAX_STRING);
+    LIB_SHORT_LENGTH:	INTEGER;
+    LIB_TEXT_1_LENGTH:	INTEGER;
+    LIB_TEXT_2_LENGTH:	INTEGER;
+    LAST:		INTEGER;
+    LIB_INFO:		TREE;
+  begin
+    OPEN(LIB_CTRL, IN_FILE, "ADA__LIB.CTL");
+    loop
+      GET(LIB_CTRL,LIB_CHAR);
+      if LIB_CHAR = 'T' then
+	GET(LIB_CTRL,LIB_NUM);
+	CUR_TIMESTAMP := LIB_NUM;
+	exit;
+      elsif LIB_CHAR = 'P' then
+	GET(LIB_CTRL,DUMMY_CHAR);
+	GET_LINE(LIB_CTRL,LIB_TEXT_1,LAST);
+	SET(LIB_PREFIX, TO => LIB_TEXT_1(1..LAST));
+      else
+	GET(LIB_CTRL,DUMMY_CHAR);
+	GET_LINE(LIB_CTRL,LIB_SHORT,LAST);
+	LIB_SHORT_LENGTH := LAST;
+	GET_LINE(LIB_CTRL,LIB_TEXT_1,LAST);
+	LIB_TEXT_1_LENGTH := LAST;
+        if LIB_CHAR = 'U' then
+          LIB_TEXT_2(1..1) := "$";
+	  LIB_TEXT_2_LENGTH := 1;
+        elsif LIB_CHAR = 'S' then
+	  GET_LINE(LIB_CTRL,LIB_TEXT_2,LAST);
+	  LIB_TEXT_2_LENGTH := LAST;
+	else
+	  raise ASSERTION_ERROR;
+	end if;
+	LIB_INFO := MAKE(DN_LIB_INFO);
+	D(XD_SHORT, LIB_INFO, STORESYM(LIB_SHORT(1 .. LIB_SHORT_LENGTH)));
+	D(XD_PRIMARY, LIB_INFO, STORESYM(LIB_TEXT_1(1 .. LIB_TEXT_1_LENGTH)));
+	D(XD_SECONDARY, LIB_INFO, STORESYM(LIB_TEXT_2(1 .. LIB_TEXT_2_LENGTH)));
+	LIB_INFO_SEQ := APPEND(LIB_INFO_SEQ, LIB_INFO);
+      end if;
+    end loop;
+    CLOSE(LIB_CTRL);
+  end OPEN_LIBRARY;
+
+
+  function MAKE_FILE_SYM(PRI, SEC: STRING) return TREE is
+    PRISYM:		TREE;
+    SECSYM:		TREE;
+    TEMP_INFO_SEQ:	SEQ_TYPE;
+    LIB_INFO:		TREE;
+    FILENAME:		PNAME;
+    EXTEN:		PNAME;
+    FILESYM:		TREE;
+  begin
+    if SEC = ".DCL" or else SEC = ".BDY" then
+      if PRI'LENGTH <= 8 then
+	return STORESYM(PRI & SEC);
+      else
+        SECSYM := STORESYM("$");
+	SET(EXTEN, TO => SEC);
+      end if;
+    else
+      SECSYM := STORESYM(SEC);
+      SET(EXTEN, TO => ".SUB");
+    end if;
+    PRISYM := STORESYM(PRI);
+
+    TEMP_INFO_SEQ := LIB_INFO_SEQ;
+    while not IS_EMPTY(TEMP_INFO_SEQ) loop
+      LIB_INFO := HEAD(TEMP_INFO_SEQ); TEMP_INFO_SEQ := TAIL(TEMP_INFO_SEQ);
+      if D(XD_PRIMARY, LIB_INFO) = PRISYM
+      and then D(XD_SECONDARY, LIB_INFO) = SECSYM then
+	SET(FILENAME, TO => PRINTNAME(D(XD_SHORT, LIB_INFO))); -- already found
+	return STORESYM(FILENAME & EXTEN);
+      end if;
+    end loop;
+
+    -- No symbol found
+    return CONST_VOID;
+  end MAKE_FILE_SYM;
+
+
+  function LOAD_UNIT(PRI,SEC: STRING) return TREE is
+    FILE_SYM: TREE := MAKE_FILE_SYM(PRI, SEC);
+  begin
+    if DEBUG_PRINT then
+	if FILE_SYM = CONST_VOID then
+            PUT("No name translation for - ");
+	    PUT(PRI);
+            if SEC(1) /= '.' then
+                PUT('.');PUT(SEC);
+	    end if;
+	    NEW_LINE;
+	end if;
+    end if;
+    return LOAD_UNIT(FILE_SYM);
+  end LOAD_UNIT;
+
+
+  function LOAD_UNIT(FILESYM_ARG: TREE) return TREE is
+    package SEQ_IO is new SEQUENTIAL_IO(SECTOR);
+
+    FILESYM:	TREE := FILESYM_ARG;
+    UNIT:	TREE := CONST_VOID;
+    LIB_FILE:	SEQ_IO.FILE_TYPE;
+    PAGE:	TREE;
+    DLTA:	INTEGER;
+    UNIT_TIMESTAMP: INTEGER;
+    WUNIT_SEQ:	SEQ_TYPE;
+    WUNIT_LIST: TREE;
+    WUNIT:	TREE;
+    WORD:	TREE;
+
+    function OFFSET(T:TREE) return TREE is
+      TEMP: TREE := T;
+    begin
+      TEMP.TPG := TEMP.TPG + SHORT(DLTA);
+      return TEMP;
+    end OFFSET;
+
+    procedure LOAD_WITHED_UNIT(WUNIT: TREE) is
+      UNIT:	TREE;
+    begin
+      UNIT := LOAD_UNIT(STORESYM(PRINTNAME(
+	    OFFSET(D(TW_FILENAME,OFFSET(WUNIT))))));
+      if UNIT = CONST_VOID then
+	raise NAME_ERROR;
+      end if;
+      if DI(XD_TIMESTAMP, UNIT) >= UNIT_TIMESTAMP then
+	if DEBUG_PRINT then
+          PUT(PRINTNAME(D(XD_LIB_NAME,UNIT)));PUT(" later than ");
+	  PUT_LINE(PRINTNAME(FILESYM));
+	end if;
+	raise NAME_ERROR;
+      end if;
+    end LOAD_WITHED_UNIT;
+
+    procedure RELOCATE_UNIT(UNIT: TREE) is
+      RELOC: array (VPG_NBR) of INTEGER;
+      PNTR:  TREE := UNIT;
+      LAST_PAGE : INTEGER := INTEGER(PNTR.TPG) + DI(XD_NBR_PAGES,UNIT) - 1;
+      WORD_ZERO: TREE;
+      WORD:	 TREE;
+      NODE_KIND: NODE_NAME;
+
+      procedure RELOC_FOR_WUNIT(WUNIT: TREE) is
+	TRANS_WITH : TREE := OFFSET(WUNIT);
+	NEW_UNIT : TREE := LOAD_UNIT(STORESYM(PRINTNAME(
+	    OFFSET(D(TW_FILENAME,TRANS_WITH)) ))); -- find it again
+	FIRST_PAGE: INTEGER := INTEGER(NEW_UNIT.TPG);
+	UNIT_PNTR:   TREE := D(TW_COMP_UNIT, TRANS_WITH); -- the old one
+	DLTA: INTEGER := FIRST_PAGE - INTEGER(UNIT_PNTR.TPG);
+	NBR_PAGES: INTEGER := DI(XD_NBR_PAGES,
+              MAKE_TREE(FIRST_PAGE, NODE_NAME'POS(DN_COMPILATION_UNIT), 1));
+      begin
+	for I in INTEGER(UNIT_PNTR.TPG)
+		.. INTEGER(UNIT_PNTR.TPG) + NBR_PAGES - 1 loop
+	  RELOC(I) := I + DLTA;
+	end loop;
+      end RELOC_FOR_WUNIT;
+
+    begin
+      for I in VPG_NBR loop
+	RELOC(I) := -1;
+      end loop;
+
+      for I in INTEGER(UNIT.TPG)
+			 .. INTEGER(UNIT.TPG) + DI(XD_NBR_PAGES,UNIT) - 1 loop
+	RELOC(I - DLTA) := I;
+      end loop;
+
+      WUNIT_LIST := WUNIT_SEQ.H;
+      if WUNIT_LIST /= CONST_NIL then
+	while KIND(WUNIT_LIST) = DN_LIST loop
+	  WUNIT := D(XD_HEAD,OFFSET(WUNIT_LIST));
+	  WUNIT_LIST := D(XD_TAIL,OFFSET(WUNIT_LIST));
+	  RELOC_FOR_WUNIT(WUNIT);
+	end loop;
+	RELOC_FOR_WUNIT(WUNIT_LIST);
+      end if;
+
+--@   declare
+--@	PRIOR: INTEGER := 0;
+--@   begin
+--@     PUT_LINE("---------- RELOC table:");
+--@	for I in VPG_NBR loop
+--@	  if RELOC(I) /= PRIOR then
+--@	    PUT(I,4);PUT(RELOC(I),5);NEW_LINE;
+--@	    PRIOR := RELOC(I);
+--@	  end if;
+--@	end loop;
+--@     PUT_LINE("----------");
+--@   end;
+
+      -- table is set up, do the reloc
+      while INTEGER(PNTR.TPG) <= LAST_PAGE loop
+--@     PUT("PNTR = ");PUT_TREE(PNTR);NEW_LINE;
+	WORD_ZERO := DABS(0,PNTR);
+--@     PUT("WD_0 = ");PUT_TREE(WORD_ZERO);
+--@	if WORD_ZERO.TPG > 0 then
+--@       PUT(' ');PUT(NODE_IMAGE(NODE_NAME'VAL(WORD_ZERO.TPG)));
+--@	end if;
+--@	NEW_LINE;
+	if WORD_ZERO = CONST_VIRGIN then
+	  PNTR.TPG := PNTR.TPG + 1;
+	  PNTR.TLN := BYTE(1);
+	else
+          NODE_KIND := NODE_NAME'VAL(WORD_ZERO.TPG);
+          PNTR.TTY := NODE_NAME'POS(NODE_KIND);
+	  if NODE_KIND = DN_TXTREP or NODE_KIND = DN_NUM_VAL then
+	    null;
+	  else
+	    for I in 1 .. INTEGER(WORD_ZERO.TLN) loop
+	      WORD := DABS(I, PNTR);
+--@           PUT("--");PUT(I,2);PUT(' ');PUT_TREE(WORD);NEW_LINE;
+	      if WORD.TLN = 0 then
+		null;
+	      elsif WORD.TPG < 0 then
+		if WORD /= CONST_VIRGIN then
+		  WORD.TPG := SHORT(- RELOC( - INTEGER(WORD.TPG)));
+		end if;
+		DABS(I, PNTR, WORD);
+	      else
+		WORD.TPG := SHORT(RELOC(INTEGER(WORD.TPG)));
+		DABS(I, PNTR, WORD);
+--@             PUT(">>");PUT(I,2);PUT(' ');PUT_TREE(WORD);
+--@             PUT(' ');PUT_LINE(NODE_IMAGE(KIND(WORD)));
+	      end if;
+	    end loop;
+	  end if;
+	  PNTR.TLN := BYTE(INTEGER(PNTR.TLN) + INTEGER(WORD_ZERO.TLN) + 1);
+	  if INTEGER(PNTR.TLN) >= SECTOR_SIZE then
+	    PNTR.TPG := PNTR.TPG + 1;
+	    PNTR.TLN := BYTE(1);
+	  end if;
+	end if;
+      end loop;
+    end RELOCATE_UNIT;
+
+  begin -- LOAD_UNIT
+    if FILESYM = CONST_VOID then
+      return CONST_VOID;
+    elsif not IS_EMPTY(LIST(FILESYM)) then
+      UNIT := HEAD(LIST(FILESYM));
+      return UNIT;
+    end if;
+
+    -- Must actually load it
+    SEQ_IO.OPEN(LIB_FILE, SEQ_IO.IN_FILE, LIB_PREFIX & PRINTNAME(FILESYM));
+    if DEBUG_PRINT then
+      PUT("Loading ");PUT(PRINTNAME(FILESYM));PUT('.');NEW_LINE;
+    end if;
+    PAGE := MAKE(0, SECTOR_SIZE-1);
+    SEQ_IO.READ(LIB_FILE, RPG(VPG(INTEGER(PAGE.TPG)).RP).DATA.all);
+    UNIT := DABS(0,PAGE); -- construct unit pointer
+    UNIT := MAKE_TREE(INTEGER(PAGE.TPG), INTEGER(UNIT.TPG), 1);
+
+    for I in 2 .. DI(XD_NBR_PAGES, UNIT) loop
+      PAGE := MAKE(0, SECTOR_SIZE-1);
+      SEQ_IO.READ(LIB_FILE, RPG(VPG(INTEGER(PAGE.TPG)).RP).DATA.all);
+    end loop;
+    SEQ_IO.CLOSE(LIB_FILE);
+
+    if DEBUG_PRINT then
+      PUT_LINE("Relocate.");
+    end if;
+    WORD := D(XD_LIB_NAME, UNIT); -- a pointer into old first page
+    DLTA := INTEGER(UNIT.TPG - WORD.TPG); -- offset from position in file
+    UNIT_TIMESTAMP := DI(XD_TIMESTAMP, UNIT);
+
+    WUNIT_SEQ := LIST(UNIT); -- "list" -- but with offset pointers
+    WUNIT_LIST:= WUNIT_SEQ.H;
+    if WUNIT_LIST /= CONST_NIL then
+      while KIND(WUNIT_LIST) = DN_LIST loop
+	WUNIT := D(XD_HEAD,OFFSET(WUNIT_LIST));
+	WUNIT_LIST := D(XD_TAIL,OFFSET(WUNIT_LIST));
+	LOAD_WITHED_UNIT(WUNIT);
+      end loop;
+      LOAD_WITHED_UNIT(WUNIT_LIST);
+    end if;
+    RELOCATE_UNIT(UNIT);
+    LOADED_UNIT_LIST := INSERT(LOADED_UNIT_LIST, UNIT);
+    UNITS_WITHED_LIST := APPEND(UNITS_WITHED_LIST, UNIT);
+    LIST(FILESYM, INSERT(MAKE,UNIT));
+    return UNIT;
+  exception
+    when NAME_ERROR =>
+      if DEBUG_PRINT then
+        PUT("Not found ");PUT(PRINTNAME(FILESYM));PUT('.');NEW_LINE;
+      end if;
+      LIST(FILESYM, INSERT(MAKE,CONST_VOID));
+      return CONST_VOID;
+  end LOAD_UNIT;
+
+  procedure WITH_UNIT(UNIT: TREE) is
+    WITH_UNIT_SEQ: SEQ_TYPE := TRANS_WITH_SEQ;
+    U_TO_WITH:	   TREE;
+    FILE_NAME:	   PNAME;
+    SUB_WITH_SEQ:  SEQ_TYPE;
+    SUB_WITH:	   TREE;
+  begin
+    while not IS_EMPTY(WITH_UNIT_SEQ) loop
+      U_TO_WITH := HEAD(WITH_UNIT_SEQ); WITH_UNIT_SEQ := TAIL(WITH_UNIT_SEQ);
+      if D(TW_COMP_UNIT, U_TO_WITH) = UNIT then
+	return;
+      end if;
+    end loop;
+
+    -- Put transitively withed things on with list first
+    SUB_WITH_SEQ := LIST(UNIT);
+    while not IS_EMPTY(SUB_WITH_SEQ) loop
+      SUB_WITH := HEAD(SUB_WITH_SEQ); SUB_WITH_SEQ := TAIL(SUB_WITH_SEQ);
+      WITH_UNIT(D(TW_COMP_UNIT,SUB_WITH));
+    end loop;
+
+    U_TO_WITH := MAKE(DN_TRANS_WITH);
+    if DEBUG_PRINT then
+      PUT("With: ");PUT(PRINTNAME(D(XD_LIB_NAME,UNIT)));PUT('.');NEW_LINE;
+    end if;
+    -- Force new txtrep so it is in correct library file
+    SET(FILE_NAME, TO => PRINTNAME(D(XD_LIB_NAME, UNIT)));
+    D(TW_FILENAME, U_TO_WITH, STORETEXT(FILE_NAME));
+    D(TW_COMP_UNIT, U_TO_WITH, UNIT);
+    TRANS_WITH_SEQ := APPEND(TRANS_WITH_SEQ, U_TO_WITH);
+  end WITH_UNIT;
+
+  procedure ENTER_USED_DEFINING_IDS is
+    UNIT: TREE;
+    PNTR: TREE;
+    WORD_ZERO: TREE;
+    NODE_TYPE: NODE_NAME;
+    SYMREP: TREE;
+  begin
+    while not IS_EMPTY(LOADED_UNIT_LIST) loop
+      POP(LOADED_UNIT_LIST, UNIT);
+      PNTR := UNIT;
+      for I in 1 .. DI(XD_NBR_PAGES, UNIT) loop
+	PNTR.TLN := 1;
+	while PNTR.TLN < SECTOR_SIZE loop
+	  WORD_ZERO := DABS(0, PNTR);
+	  exit
+	    when WORD_ZERO = CONST_VIRGIN;
+	  PNTR.TTY := BYTE(WORD_ZERO.TPG);
+          NODE_TYPE := NODE_NAME'VAL(WORD_ZERO.TPG);
+	  case NODE_TYPE is
+	  when	CLASS_DEF_NAME =>
+	    SYMREP := D(LX_SYMREP, PNTR);
+	    if KIND(SYMREP) = DN_TXTREP then
+		SYMREP := STORESYM(PRINTNAME(SYMREP));
+		D(LX_SYMREP, PNTR, SYMREP);
+	    end if;
+	    if NODE_TYPE = DN_TYPE_ID then
+		-- check for full spec of incomplete
+		if KIND(D(SM_TYPE_SPEC, D(SM_FIRST,PNTR))) = DN_INCOMPLETE
+		then
+		    D(XD_FULL_TYPE_SPEC
+			    , D(SM_TYPE_SPEC, D(SM_FIRST,PNTR))
+			    , D(SM_TYPE_SPEC, PNTR) );
+		end if;
+	    end if;
+	  when CLASS_DESIGNATOR =>
+	    SYMREP := D(SM_DEFN, PNTR);
+	    if SYMREP.TPG > 0 -- allow for void (in, e.g., ignored pragma)
+	    and then KIND(SYMREP) in CLASS_DEF_NAME then
+	      SYMREP := D(LX_SYMREP, SYMREP);
+	      if KIND(SYMREP) = DN_SYMBOL_REP then
+		D(LX_SYMREP, PNTR, SYMREP);
+	      end if;
+	    else
+	      D(LX_SYMREP, PNTR
+			, STORESYM(PRINTNAME(D(LX_SYMREP,PNTR))) );
+	    end if;
+	  when DN_SUBPROGRAM_BODY | DN_PACKAGE_BODY =>
+	    declare
+	      SOURCE_NAME: constant TREE := D(AS_SOURCE_NAME, PNTR);
+	      FIRST_NAME: constant TREE := D(SM_FIRST, SOURCE_NAME);
+	    begin
+	      if KIND(D(AS_BODY, PNTR)) = DN_STUB then
+		D(XD_STUB, SOURCE_NAME, PNTR);
+		D(XD_STUB, FIRST_NAME, PNTR);
+	      else
+		D(XD_BODY, SOURCE_NAME, PNTR);
+		D(XD_BODY, FIRST_NAME, PNTR);
+		if D(XD_STUB, FIRST_NAME) /= CONST_VOID then
+		  D(XD_BODY, D(AS_SOURCE_NAME,D(XD_STUB,FIRST_NAME)), PNTR);
+		  D(XD_STUB, SOURCE_NAME, D(XD_STUB, FIRST_NAME));
+		end if;
+	      end if;
+	    end;
+	  when DN_TASK_BODY =>
+	    declare
+	      SOURCE_NAME: constant TREE := D(AS_SOURCE_NAME, PNTR);
+	      TASK_SPEC: constant TREE := D(SM_TYPE_SPEC, SOURCE_NAME);
+	    begin
+	      if KIND(D(AS_BODY, PNTR)) = DN_STUB then
+		D(XD_STUB, TASK_SPEC, PNTR);
+	      else
+		D(XD_BODY, TASK_SPEC, PNTR);
+	      end if;
+	    end;
+	  when others =>
+	    null;
+	  end case;
+	  PNTR.TLN := PNTR.TLN + WORD_ZERO.TLN + 1;
+	end loop;
+	PNTR.TPG := PNTR.TPG + 1;
+      end loop;
+    end loop;
+  end ENTER_USED_DEFINING_IDS;
+
+end UNITLOD;

@@ -1,0 +1,84 @@
+with USERPK; use USERPK;
+package DIANAMAN is
+
+  -- note that TTY => must match NODE_NAME'POS in DIANA package
+  -- (done this way so that DIANA does not have to be withed here)
+  CONST_FALSE:	constant TREE := (TPG => 0, TTY => 3, TLN => 0);
+  CONST_TRUE:	constant TREE := (TPG => 0, TTY => 4, TLN => 0);
+  CONST_NIL:	constant TREE := (TPG => 0, TTY => 5, TLN => 0);
+  CONST_VOID:	constant TREE := (TPG => 0, TTY => 11, TLN => 0);
+  CONST_ROOT:	constant TREE := (TPG => 1, TTY => 0, TLN => 1);
+  CONST_VIRGIN: constant TREE := (TPG => SHORT(-1), TTY =>255 , TLN => 255);
+
+  CONST_BINARY_ZERO: constant TREE := (TPG => 0, TTY => 0, TLN => 0);
+  ZERO_BYTE:	constant BYTE := 0;
+
+  -- If in pragma, contains used_name_id
+  -- Call to Error then sets sm_defn to void and calls Warning
+  PRAGMA_CONTEXT: TREE := CONST_VOID;
+
+  procedure CREATE_IDL	(SPEC_FILE: STRING);
+  procedure OPEN_IDL	(SPEC_FILE: STRING);
+  procedure CLOSE_DIANA;
+
+  function  MAKE     (C: in INTEGER)	    return TREE;
+  -- procedure DESTROY (t: in TREE);
+  -- function KIND   (T: in TREE)	    return NODE_NAME;
+
+  function  ARITY (T: in TREE)		    return ARITIES;
+  function  SON1 (T: in TREE)		    return TREE;
+  procedure SON1 (T: in TREE; V: in TREE);
+  function  SON2 (T: in TREE)		    return TREE;
+  procedure SON2 (T: in TREE; V: in TREE);
+  function  SON3 (T: in TREE)		    return TREE;
+  procedure SON3 (T: in TREE; V: in TREE);
+
+  function  HEAD	(L: in SEQ_TYPE)    return TREE;
+  function  TAIL	(L: in SEQ_TYPE)    return SEQ_TYPE;
+  function  MAKE			    return SEQ_TYPE;
+  function  IS_EMPTY	(L: in SEQ_TYPE)    return BOOLEAN;
+  function  INSERT (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE;
+  function  APPEND (L: in SEQ_TYPE; T: in TREE) return SEQ_TYPE;
+  function SINGLETON (V: TREE) return SEQ_TYPE;
+  procedure POP (L: in out SEQ_TYPE; T: out TREE);
+
+  procedure LIST	(T: in TREE; V: in SEQ_TYPE);
+  function  LIST	(T: in TREE)	    return SEQ_TYPE;
+
+  procedure D(A: INTEGER; T: in TREE; V: in TREE);
+  function  D(A: INTEGER; T: in TREE) return TREE;
+
+  procedure DB(A: INTEGER; T: in TREE; V: in BOOLEAN);
+  function  DB(A: INTEGER; T: in TREE) return BOOLEAN;
+
+  procedure DI(A: INTEGER; T: in TREE; V: in INTEGER);
+  function  DI(A: INTEGER; T: in TREE) return INTEGER;
+
+  -- Absolute attribute position
+  procedure DABS(A: INTEGER; T: in TREE; V: in TREE);
+  function  DABS(A: INTEGER; T: in TREE) return TREE;
+  function  MAKE_TREE(TPG, TTY, TLN: INTEGER) return TREE;
+
+  function NODE_IMAGE(N: INTEGER) return STRING;
+  function ATTR_IMAGE(N: INTEGER) return STRING;
+
+  function PRINTNAME(T: TREE) return STRING; -- txtrep or symbol_rep
+  function STORETEXT(V: PNAME) return TREE; -- stores a txtrep
+  function STORESYM (V: PNAME) return TREE; -- adds to sym tbl
+  function FINDSYM  (V: PNAME) return TREE; -- void if not there
+  function STORETEXT(V: STRING) return TREE; -- stores a txtrep
+  function STORESYM (V: STRING) return TREE; -- adds to sym tbl
+  function FINDSYM  (V: STRING) return TREE; -- void if not there
+
+  function MAKE_SOURCE_POSITION (T: TREE; COL: NATURAL) return TREE;
+  function GET_SOURCE_LINE (T:TREE) return TREE;
+  function GET_SOURCE_COL (T:TREE) return NATURAL;
+  procedure ERROR (SP: TREE; MSG: STRING);
+  procedure WARNING (SP: TREE; MSG: STRING);
+
+  function  MAKE     (C: INTEGER; L: INTEGER) return TREE;
+      -- make node with specified length (area 1)
+  procedure NEW_BLOCK;	-- force new block for area 1
+  function LAST_BLOCK return INTEGER; -- return high virt page
+
+end DIANAMAN;

@@ -1,0 +1,16 @@
+with USERPK; use USERPK;
+with SEMGLOB; use SEMGLOB;
+with DIANAMAN; use DIANAMAN;
+
+package DEFWALK is
+
+    function EVAL_TYPE_DEF
+		( TYPE_DEF: TREE
+		; ID: TREE
+		; H: H_TYPE
+		; DSCRMT_DECL_S: TREE := CONST_VOID )
+	    return TREE;
+
+    function GET_SUBTYPE_OF_DISCRETE_RANGE(DISCRETE_RANGE: TREE) return TREE;
+
+end DEFWALK;

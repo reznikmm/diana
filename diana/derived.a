@@ -1,0 +1,316 @@
+with DIANA, DIANAMAN, DIANATTR; use DIANA, DIANAMAN, DIANATTR;
+with DEFUTIL; use DEFUTIL;
+with VISUTIL; use VISUTIL;
+with MAKENOD; use MAKENOD;
+with REQUTIL; use REQUTIL; -- Get_Base_Struct
+
+package body DERIVED is
+
+    DERIVED_DECL_LIST: SEQ_TYPE;
+
+    function IS_OPERATION_OF_TYPE(DECL_ID, TYPE_SPEC: TREE) return BOOLEAN;
+    function MAKE_DERIVED_SUBPROGRAM
+		( DECL_ID:	TREE
+		; PARENT_TYPE:	TREE
+		; DERIVED_TYPE: TREE
+		; H:		H_TYPE )
+	    return TREE;
+
+
+    function MAKE_DERIVED_SUBPROGRAM_LIST
+		( DERIVED_SUBTYPE: TREE
+		; PARENT_SUBTYPE: TREE
+		; H: H_TYPE )
+	    return SEQ_TYPE
+    is
+	-- returns a list of derived subprograms for the derived type
+	PARENT_TYPE: TREE := GET_BASE_TYPE(PARENT_SUBTYPE);
+
+	PARENT_ID: TREE := D(XD_SOURCE_NAME, PARENT_TYPE);
+	PARENT_DEF: TREE := GET_DEF_FOR_ID(PARENT_ID);
+	PARENT_REGION: TREE := D(XD_REGION, PARENT_ID);
+
+	DERIVED_ID: TREE := D(XD_SOURCE_NAME, DERIVED_SUBTYPE);
+
+	DECL_LIST: SEQ_TYPE;
+	DECL: TREE;
+	DECL_ID: TREE;
+
+	DERIVED_SUBPROGRAM_LIST: SEQ_TYPE := MAKE;
+
+	DERIVED_OF_PARENT_LIST: SEQ_TYPE := MAKE;
+	DERIVED_OF_PARENT: TREE;
+	DERIVED_OF_PARENT_SYM: TREE;
+	DERIVED_FIRST_KIND_LIST: SEQ_TYPE;
+
+	TEMP_FIRST_KIND_LIST: SEQ_TYPE;
+	TEMP_FIRST_KIND: TREE;
+    begin
+
+	-- if parent type is in visible part of package
+	-- ... and CURRENT LOCATION is not in SAME VISIBLE PART (ERROR)
+	if KIND(PARENT_REGION) = DN_PACKAGE_ID
+	and then DB(XD_IS_IN_SPEC, PARENT_DEF)
+	and then not (H.IS_IN_SPEC
+		and then PARENT_REGION = D(XD_SOURCE_NAME, H.REGION_DEF) )
+	then
+
+	    -- scan decl list of visible part in which parent is defined
+	    -- ... until parent declaration is passed
+	    -- ... also, remember list of derived subprograms of parent
+	    DECL_LIST := LIST(D(AS_DECL_S1, D(SM_SPEC, PARENT_REGION)));
+	    loop
+	    	POP(DECL_LIST, DECL);
+	    	if KIND(DECL) = DN_TYPE_DECL 
+                or else KIND(DECL) = DN_TASK_DECL then
+		    if D(AS_SOURCE_NAME, DECL) = PARENT_ID then
+		        exit;
+		    end if;
+		end if;
+	    end loop;
+
+	    -- for each remaining declaration
+	    while not IS_EMPTY(DECL_LIST) loop
+	        POP(DECL_LIST, DECL);
+
+	        -- if it is a subprogram or entry declaration
+	        if KIND(DECL) = DN_SUBPROG_ENTRY_DECL then
+
+                    -- if it is an operation of the type (note: entry isn't)
+		    DECL_ID := D(AS_SOURCE_NAME, DECL);
+		    if IS_OPERATION_OF_TYPE(DECL_ID, PARENT_SUBTYPE) then
+
+		        -- make sure name is in symbol table
+		        if KIND(D(LX_SYMREP,DECL_ID)) = DN_TXTREP then
+			    D(LX_SYMREP
+					, DECL_ID
+					, STORESYM(PRINTNAME(D(LX_SYMREP,DECL_ID))) );
+			end if;
+
+		    	-- make new subprogram and add to list
+		    	DERIVED_SUBPROGRAM_LIST := APPEND
+				( DERIVED_SUBPROGRAM_LIST
+				, MAKE_DERIVED_SUBPROGRAM
+					( DECL_ID
+					, PARENT_SUBTYPE
+					, DERIVED_SUBTYPE
+					, H ) );
+		    end if;
+		end if;
+	    end loop;
+	end if;
+
+	-- remember list of derived subprograms of first kind
+	-- ... (Note.  Derived of second kind are inserted before it)
+	DERIVED_FIRST_KIND_LIST := DERIVED_SUBPROGRAM_LIST;
+
+	-- get list of derived subprograms of parent
+	if KIND(PARENT_TYPE) in CLASS_DERIVABLE_SPEC
+	and then D(SM_DERIVED,PARENT_TYPE) /= CONST_VOID
+	and then PARENT_TYPE = GET_BASE_STRUCT(PARENT_TYPE)
+	then
+	    declare
+		TEMP_DECL_LIST: SEQ_TYPE := DERIVED_DECL_LIST;
+		TEMP_DECL: TREE;
+	    begin
+		while not IS_EMPTY(TEMP_DECL_LIST) loop
+		    POP(TEMP_DECL_LIST, TEMP_DECL);
+
+		    if D(SM_FIRST,D(AS_SOURCE_NAME, TEMP_DECL)) = PARENT_ID then
+			DERIVED_OF_PARENT_LIST
+				:= LIST(D(AS_TYPE_DEF,TEMP_DECL));
+			exit;
+		    end if;
+		end loop;
+	    end;
+	end if;
+
+	-- for each derived subprogram of parent type
+	while not IS_EMPTY(DERIVED_OF_PARENT_LIST) loop
+	    POP(DERIVED_OF_PARENT_LIST, DERIVED_OF_PARENT);
+
+	    -- make sure name is in symbol table
+	    DERIVED_OF_PARENT_SYM := D(LX_SYMREP, DERIVED_OF_PARENT);
+	    if KIND(DERIVED_OF_PARENT_SYM) = DN_TXTREP then
+		DERIVED_OF_PARENT_SYM
+			:= STORESYM(PRINTNAME(D(LX_SYMREP,DERIVED_OF_PARENT)));
+		D(LX_SYMREP, DERIVED_OF_PARENT, DERIVED_OF_PARENT_SYM);
+	    end if;
+
+	    -- for each derived subprogram of the first kind
+	    TEMP_FIRST_KIND_LIST := DERIVED_FIRST_KIND_LIST;
+	    while not IS_EMPTY(TEMP_FIRST_KIND_LIST) loop
+		TEMP_FIRST_KIND := HEAD(TEMP_FIRST_KIND_LIST);
+
+		-- if it hides the derived subprogram of the second kind
+		if D(LX_SYMREP, TEMP_FIRST_KIND) = DERIVED_OF_PARENT_SYM
+		and then ARE_HOMOGRAPH_HEADERS
+			( D(SM_SPEC, DERIVED_OF_PARENT)
+			, D(SM_SPEC
+				, D(SM_DERIVABLE
+					, D(SM_UNIT_DESC,TEMP_FIRST_KIND) )))
+		then
+
+                    -- can't be derived of second kind (list non-empty at exit)
+		    exit;
+		end if;
+
+		TEMP_FIRST_KIND_LIST := TAIL(TEMP_FIRST_KIND_LIST);
+	    end loop;
+
+	    -- if no hiding derived subprogram of first kind was found
+	    if IS_EMPTY(TEMP_FIRST_KIND_LIST) then
+
+		-- make new subprogram and add to beginning of list
+		DERIVED_SUBPROGRAM_LIST := INSERT
+			    ( DERIVED_SUBPROGRAM_LIST
+			    , MAKE_DERIVED_SUBPROGRAM
+				    ( DERIVED_OF_PARENT
+				    , PARENT_SUBTYPE
+				    , DERIVED_SUBTYPE
+				    , H ) );
+	    end if;
+	end loop;
+
+	-- return the list of derived subprograms
+	return DERIVED_SUBPROGRAM_LIST;
+    end MAKE_DERIVED_SUBPROGRAM_LIST;
+
+
+    procedure REMEMBER_DERIVED_DECL (DECL: TREE) is
+	TYPE_DEF: TREE;
+    begin
+	if DECL = CONST_VOID then
+	    -- (initialization call -- from fixwith)
+	    DERIVED_DECL_LIST := MAKE;
+	    return;
+	end if;
+
+	TYPE_DEF := D(AS_TYPE_DEF, DECL);
+	if KIND(TYPE_DEF) = DN_DERIVED_DEF
+	and then not IS_EMPTY(LIST(TYPE_DEF)) then
+	    DERIVED_DECL_LIST := INSERT(DERIVED_DECL_LIST, DECL);
+	end if;
+    end REMEMBER_DERIVED_DECL;
+
+
+    function IS_OPERATION_OF_TYPE(DECL_ID, TYPE_SPEC: TREE) return BOOLEAN is
+	BASE_TYPE: TREE := GET_BASE_TYPE(TYPE_SPEC);
+	HEADER: TREE := D(SM_SPEC, DECL_ID);
+	PARAM_CURSOR: PARAM_CURSOR_TYPE;
+    begin
+
+	-- check for entry id; if so, it is not operation
+        -- ... (While we're at it, make sure it is a subprogram)
+	if KIND(DECL_ID) not in CLASS_SUBPROG_NAME then
+	    return FALSE;
+	end if;
+
+	-- if it is a function or operator and result is of the given type
+	if KIND(DECL_ID) /= DN_PROCEDURE_ID -- only other possibility
+	and then GET_BASE_TYPE(D(AS_NAME, HEADER)) = BASE_TYPE then
+	    return TRUE;
+	end if;
+
+	-- for each parameter
+	INIT_PARAM_CURSOR(PARAM_CURSOR, LIST(D(AS_PARAM_S,HEADER)));
+	loop
+	    ADVANCE_PARAM_CURSOR(PARAM_CURSOR);
+	    exit
+		when PARAM_CURSOR.ID = CONST_VOID;
+
+	    -- if it is of the proper type
+	    if GET_BASE_TYPE(PARAM_CURSOR.ID) = BASE_TYPE then
+
+		-- it is an operation; return true
+		return TRUE;
+	    end if;
+	end loop;
+
+	-- none found; it is not an operation
+	return FALSE;
+    end IS_OPERATION_OF_TYPE;
+
+
+    function MAKE_DERIVED_SUBPROGRAM
+		( DECL_ID:	TREE
+		; PARENT_TYPE:	TREE
+		; DERIVED_TYPE: TREE
+		; H:		H_TYPE )
+	    return TREE
+    is
+	NEW_ID: TREE := COPY_NODE(DECL_ID);
+	NEW_DEF: TREE := MAKE_DEF_FOR_ID(NEW_ID, H);
+	HEADER: TREE := D(SM_SPEC, DECL_ID);
+	NEW_HEADER: TREE := COPY_NODE(HEADER);
+	NEW_TYPE_MARK: TREE := MAKE_USED_NAME_ID
+		( LX_SYMREP => D(LX_SYMREP, D(XD_SOURCE_NAME,DERIVED_TYPE))
+		, SM_DEFN => D(XD_SOURCE_NAME,DERIVED_TYPE) );
+	PARAM_CURSOR: PARAM_CURSOR_TYPE;
+	NEW_PARAM_LIST: SEQ_TYPE := MAKE;
+	NEW_PARAM_ID: TREE;
+	NEW_PARAM_DECL: TREE;
+	UNEQUAL_ID: TREE;
+    begin
+	D(SM_FIRST, NEW_ID, NEW_ID);
+	D(SM_UNIT_DESC, NEW_ID, MAKE_DERIVED_SUBPROG
+		( SM_DERIVABLE => DECL_ID ) );
+	D(XD_STUB, NEW_ID, CONST_VOID);
+	D(XD_BODY, NEW_ID, CONST_VOID);
+	D(SM_SPEC, NEW_ID, NEW_HEADER);
+	D(SM_ADDRESS, NEW_ID, CONST_VOID);
+
+	MAKE_DEF_VISIBLE(NEW_DEF, NEW_HEADER);
+	if KIND(HEADER) = DN_FUNCTION_SPEC
+	and then GET_BASE_TYPE(D(AS_NAME,HEADER)) = PARENT_TYPE then
+	    D(AS_NAME,NEW_HEADER,NEW_TYPE_MARK);
+	end if;
+	INIT_PARAM_CURSOR(PARAM_CURSOR, LIST(D(AS_PARAM_S,HEADER)));
+	loop
+	    ADVANCE_PARAM_CURSOR(PARAM_CURSOR);
+	    exit
+		when PARAM_CURSOR.ID = CONST_VOID;
+	    NEW_PARAM_ID := COPY_NODE(PARAM_CURSOR.ID);
+	    D(SM_FIRST, NEW_PARAM_ID, NEW_PARAM_ID);
+	    NEW_PARAM_DECL := COPY_NODE(PARAM_CURSOR.PARAM);
+	    D(XD_REGION, NEW_PARAM_ID, NEW_ID);
+	    D(AS_SOURCE_NAME_S, NEW_PARAM_DECL
+			, MAKE_SOURCE_NAME_S(LIST => SINGLETON(NEW_PARAM_ID)) );
+	    if GET_BASE_TYPE(PARAM_CURSOR.ID) = PARENT_TYPE then
+		D(SM_OBJ_TYPE, NEW_PARAM_ID, DERIVED_TYPE);
+		if D(SM_INIT_EXP, PARAM_CURSOR.ID) /= CONST_VOID then
+		    D(SM_INIT_EXP, NEW_PARAM_ID, MAKE_CONVERSION
+				( AS_NAME => NEW_TYPE_MARK
+				, AS_EXP => D(SM_INIT_EXP, PARAM_CURSOR.ID)
+				, SM_EXP_TYPE => DERIVED_TYPE ) );
+		end if;
+	    end if;
+	   NEW_PARAM_LIST := APPEND (NEW_PARAM_LIST, NEW_PARAM_DECL);
+	end loop;
+	D(AS_PARAM_S, NEW_HEADER, MAKE_PARAM_S (LIST => NEW_PARAM_LIST));
+
+	-- also derive inequality if this is equality operator
+	if KIND(NEW_ID) = DN_OPERATOR_ID then
+	    UNEQUAL_ID := D(XD_NOT_EQUAL, NEW_ID);
+	    if UNEQUAL_ID /= CONST_VOID then
+		UNEQUAL_ID := COPY_NODE(UNEQUAL_ID);
+		D(SM_FIRST, UNEQUAL_ID, UNEQUAL_ID);
+		D(SM_SPEC, UNEQUAL_ID, NEW_HEADER);
+		if KIND(D(LX_SYMREP,UNEQUAL_ID)) = DN_SYMBOL_REP then
+		    MAKE_DEF_VISIBLE
+			    ( MAKE_DEF_FOR_ID(UNEQUAL_ID, H)
+			    , NEW_HEADER );
+		end if;
+		D(SM_UNIT_DESC
+			, UNEQUAL_ID
+			, MAKE_DERIVED_SUBPROG
+				( SM_DERIVABLE => D(XD_NOT_EQUAL,NEW_ID) ) );
+		D(XD_NOT_EQUAL, NEW_ID, UNEQUAL_ID);
+	    end if;
+	end if;
+
+	return NEW_ID;
+    end MAKE_DERIVED_SUBPROGRAM;
+
+
+end DERIVED;

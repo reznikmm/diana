@@ -1,0 +1,14 @@
+with USERPK; use USERPK;
+with SEMGLOB; use SEMGLOB;
+
+package DERIVED is
+    function MAKE_DERIVED_SUBPROGRAM_LIST
+		( DERIVED_SUBTYPE: TREE
+		; PARENT_SUBTYPE: TREE
+		; H: H_TYPE )
+	    return SEQ_TYPE;
+
+    procedure REMEMBER_DERIVED_DECL (DECL: TREE);
+    -- (called from Fixwith -- remembers derived decl with derived subp)
+
+end DERIVED;

@@ -1,0 +1,121 @@
+with IO_EXCEPTIONS;
+with TEXT_IO; use TEXT_IO;
+package TEXT2_IO is
+
+subtype FILE_TYPE is TEXT_IO.FILE_TYPE;
+
+subtype FILE_MODE is TEXT_IO.FILE_MODE;
+function IN_FILE return TEXT_IO.FILE_MODE renames TEXT_IO.IN_FILE;
+function OUT_FILE return TEXT_IO.FILE_MODE renames TEXT_IO.OUT_FILE;
+
+subtype COUNT is TEXT_IO.COUNT;
+subtype POSITIVE_COUNT is COUNT range 1 .. COUNT'LAST;
+UNBOUNDED: constant COUNT := 0;
+
+subtype FIELD is TEXT_IO.FIELD;
+
+procedure CREATE ( FILE: in out FILE_TYPE;
+		   MODE: in FILE_MODE := TEXT_IO.OUT_FILE;
+                   NAME: in STRING    := "";
+                   FORM: in STRING    := "")
+    renames TEXT_IO.CREATE;
+
+procedure OPEN	 ( FILE: in out FILE_TYPE;
+		   MODE: in FILE_MODE;
+		   NAME: in STRING;
+                   FORM: in STRING    := "")
+    renames TEXT_IO.OPEN;
+
+procedure CLOSE(FILE : in out FILE_TYPE)
+    renames TEXT_IO.CLOSE;
+
+procedure NEW_LINE(FILE : in FILE_TYPE; SPACING: in POSITIVE_COUNT := 1)
+    renames TEXT_IO.NEW_LINE;
+procedure NEW_LINE(SPACING: in POSITIVE_COUNT := 1)
+    renames TEXT_IO.NEW_LINE;
+
+procedure SKIP_LINE(FILE : in FILE_TYPE; SPACING: in POSITIVE_COUNT := 1)
+    renames TEXT_IO.SKIP_LINE;
+procedure SKIP_LINE(SPACING: in POSITIVE_COUNT := 1)
+    renames TEXT_IO.SKIP_LINE;
+
+function END_OF_LINE(FILE : in FILE_TYPE) return BOOLEAN
+    renames TEXT_IO.END_OF_LINE;
+function END_OF_LINE return BOOLEAN
+    renames TEXT_IO.END_OF_LINE;
+
+function END_OF_FILE(FILE : in FILE_TYPE) return BOOLEAN
+    renames TEXT_IO.END_OF_FILE;
+function END_OF_FILE return BOOLEAN
+    renames TEXT_IO.END_OF_FILE;
+
+procedure GET(FILE: in FILE_TYPE; ITEM : out CHARACTER)
+    renames TEXT_IO.GET;
+procedure GET(ITEM: out CHARACTER)
+    renames TEXT_IO.GET;
+procedure PUT(FILE: in FILE_TYPE; ITEM : in CHARACTER)
+    renames TEXT_IO.PUT;
+procedure PUT(ITEM: in CHARACTER)
+    renames TEXT_IO.PUT;
+
+procedure GET(FILE: in FILE_TYPE; ITEM : out STRING)
+    renames TEXT_IO.GET;
+procedure GET(ITEM: out STRING)
+    renames TEXT_IO.GET;
+procedure PUT(FILE: in FILE_TYPE; ITEM : in STRING)
+    renames TEXT_IO.PUT;
+procedure PUT(ITEM: in STRING)
+    renames TEXT_IO.PUT;
+
+procedure GET_LINE(FILE: in FILE_TYPE; ITEM : out STRING; LAST: out NATURAL)
+    renames TEXT_IO.GET_LINE;
+procedure GET_LINE(ITEM : out STRING; LAST: out NATURAL)
+    renames TEXT_IO.GET_LINE;
+procedure PUT_LINE(FILE: in FILE_TYPE; ITEM : in STRING)
+    renames TEXT_IO.PUT_LINE;
+procedure PUT_LINE(ITEM: in STRING)
+    renames TEXT_IO.PUT_LINE;
+
+-- Integer I/O
+package NEW_INTEGER_IO is new TEXT_IO.INTEGER_IO (NUM => INTEGER);
+procedure GET(FILE:  in FILE_TYPE;
+	      ITEM:  out INTEGER;
+	      WIDTH: in FIELD := 0)
+    renames NEW_INTEGER_IO.GET;
+procedure GET(ITEM:  out INTEGER;
+	      WIDTH: in FIELD := 0)
+    renames NEW_INTEGER_IO.GET;
+procedure PUT(FILE:  in FILE_TYPE;
+	      ITEM:  in INTEGER;
+              WIDTH: in FIELD := INTEGER'WIDTH;
+	      BASE:  in TEXT_IO.NUMBER_BASE := 10)
+    renames NEW_INTEGER_IO.PUT;
+procedure PUT(ITEM:  in INTEGER;
+              WIDTH: in FIELD := INTEGER'WIDTH;
+	      BASE:  in TEXT_IO.NUMBER_BASE := 10)
+    renames NEW_INTEGER_IO.PUT;
+
+-- Boolean I/O
+package NEW_BOOLEAN_IO is new TEXT_IO.ENUMERATION_IO (ENUM => BOOLEAN);
+procedure PUT(FILE:  in FILE_TYPE;
+	      ITEM:  in BOOLEAN;
+	      WIDTH: in FIELD := 0;
+	      SET:   in TEXT_IO.TYPE_SET := TEXT_IO.UPPER_CASE)
+    renames NEW_BOOLEAN_IO.PUT;
+procedure PUT(ITEM:  in BOOLEAN;
+	      WIDTH: in FIELD := 0;
+	      SET:   in TEXT_IO.TYPE_SET := TEXT_IO.UPPER_CASE)
+    renames NEW_BOOLEAN_IO.PUT;
+
+-- Exceptions
+
+    Status_Error : Exception Renames IO_Exceptions.Status_Error;
+    Mode_Error	 : Exception Renames IO_Exceptions.Mode_Error;
+    Name_Error	 : Exception Renames IO_Exceptions.Name_Error;
+    Data_Error	 : Exception Renames IO_Exceptions.Data_Error;
+    Use_Error	 : Exception Renames IO_Exceptions.Use_Error;
+    Device_Error : Exception Renames IO_Exceptions.Device_Error;
+    End_Error	 : Exception Renames IO_Exceptions.End_Error;
+    Layout_Error : Exception Renames IO_Exceptions.Layout_Error;
+
+end TEXT2_IO;

@@ -1,0 +1,64 @@
+with TEXT_IO, USERPK, LALRIDL, DIANAMAN;
+use  TEXT_IO, USERPK, LALRIDL, DIANAMAN;
+
+procedure PUTLAIDL is  -- Uses IDL in virtual memory and writes IDL Table
+
+  RESULT_FILE: TEXT_IO.FILE_TYPE;
+
+  RULE_LIST   :  SEQ_TYPE;
+
+  package INT_IO is new TEXT_IO.INTEGER_IO(INTEGER);
+  use INT_IO;
+
+  procedure PROCESS_RULES is
+
+    procedure PUT_RULE (RULE: in TREE) is
+
+      TER_LIST	  :  SEQ_TYPE;
+      TER:	     TREE;
+
+      procedure PUT_TERMINAL (TER : in TREE) is
+
+      begin  -- PUT_TERMINAL
+        PUT ("A   ");
+	PUT ( DI (XD_TER_NBR, TER));
+        PUT("   ");
+	PUT_LINE (PRINTNAME (D (XD_SYMREP, TER)));
+      end PUT_TERMINAL;
+
+    begin  --  PUT_RULE
+      PUT("N ");
+      PUT (DI(XD_RULEINFO, RULE), 3);
+      PUT(' ');
+      PUT_LINE (PRINTNAME ( D (XD_NAME, RULE)));
+      TER_LIST := LIST (RULE);
+      while not IS_EMPTY (TER_LIST)
+      loop
+	TER := HEAD(TER_LIST);
+	if KIND (TER) = DN_TERMINAL then  -- i.e., skip over code
+	  PUT_TERMINAL ( TER );
+	end if;
+	TER_LIST := TAIL (TER_LIST);
+      end loop;
+    end PUT_RULE;
+
+  begin  --  PROCESS_RULES
+    RULE_LIST := LIST ( D ( XD_GRAMMAR, D ( XD_USER_ROOT, CONST_ROOT)));
+    while not IS_EMPTY (RULE_LIST)
+    loop
+      PUT_RULE (HEAD (RULE_LIST));
+      RULE_LIST := TAIL (RULE_LIST);
+    end loop;
+  end PROCESS_RULES;
+
+begin  --  PUTIDL
+  OPEN_DIANA;
+
+  CREATE(RESULT_FILE, NAME => "DIANATBL.NEW");
+  SET_OUTPUT(RESULT_FILE);
+
+  PROCESS_RULES;
+
+  SET_OUTPUT(STANDARD_OUTPUT);
+  CLOSE(RESULT_FILE);
+end PUTLAIDL;

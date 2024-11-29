@@ -1,0 +1,55 @@
+with USERPK; use USERPK;
+package UARITH is
+    -- universal arithmetic functions
+    -- This package is intended to be used withing the Ada
+    --	 front end.  Parameters are assumed to be void or of
+    --	 the correct type (num_val or real_val nodes)
+
+    -- make universal value from an integer
+    function U_VAL(A: INTEGER) return TREE;
+
+    -- make universal value (integer or real) from string
+    -- return void if illegal value
+    function U_VALUE(TXT: STRING) return TREE;
+
+    -- return integer value for universal (must be in range)
+    function U_POS(A: TREE) return INTEGER;
+
+    -- operators on universal values
+    -- return void if either operand is void
+
+    -- following return 0 or 1 or void
+    function U_EQUAL(LEFT, RIGHT: TREE) return TREE;
+    function U_NOT_EQUAL(LEFT, RIGHT: TREE) return TREE;
+    function "<"(LEFT, RIGHT: TREE) return TREE;
+    function "<="(LEFT, RIGHT: TREE) return TREE;
+    function ">"(LEFT, RIGHT: TREE) return TREE;
+    function ">="(LEFT, RIGHT: TREE) return TREE;
+    function U_MEMBER(VALUE, DISCRETE_RANGE: TREE) return TREE;
+
+    -- following return boolean (for compiler range tests)
+    function "<="(LEFT, RIGHT: TREE) return BOOLEAN;
+    function ">="(LEFT, RIGHT: TREE) return BOOLEAN;
+    function U_EQUAL(LEFT, RIGHT: TREE) return BOOLEAN;
+    function U_MEMBER(VALUE, DISCRETE_RANGE: TREE) return BOOLEAN;
+
+    -- following expect 0 or 1 as argument -- boolean operators
+    function "AND"(LEFT, RIGHT: TREE) return TREE;
+    function "OR"(LEFT, RIGHT: TREE) return TREE;
+    function "XOR"(LEFT, RIGHT: TREE) return TREE;
+    function "NOT"(RIGHT: TREE) return TREE;
+
+    -- unary functions
+    function "-"(RIGHT: TREE) return TREE;
+    function "ABS"(RIGHT: TREE) return TREE;
+
+    -- binary functions
+    function "+"(LEFT, RIGHT: TREE) return TREE;
+    function "-"(LEFT, RIGHT: TREE) return TREE;
+    function "*"(LEFT, RIGHT: TREE) return TREE; -- i*i, i*r, r*i, r*r
+    function "/"(LEFT, RIGHT: TREE) return TREE; -- i/i, r/i, r/r
+    function "MOD"(LEFT, RIGHT: TREE) return TREE;
+    function "REM"(LEFT, RIGHT: TREE) return TREE;
+    function "**"(LEFT, RIGHT: TREE) return TREE; -- i**i, r**i
+
+end UARITH;

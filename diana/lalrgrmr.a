@@ -1,0 +1,386 @@
+with TEXT2_IO, USERPK, LALRIDL, DIANAMAN, TERMLIST;
+use  TEXT2_IO, USERPK, LALRIDL, DIANAMAN, TERMLIST;
+--@-- with PRINTNOD; use PRINTNOD;
+procedure LALRGRMR is
+  type STBL_TYPE is
+    record
+      CHANGED:	BOOLEAN;
+      CLOSURE:	BOOLEAN;
+      STATE:	TREE;
+    end record;
+  STBL: array(1..1100) of STBL_TYPE;
+
+  type RTBL_TYPE is
+    record
+      STATE_NBR:INTEGER;
+      REQ_CHECK:BOOLEAN;
+      FOLLOW:	TREE;
+    end record;
+  RTBL: array(1..400) of RTBL_TYPE;
+
+  MORE_PASSES: BOOLEAN;
+  MORE_CLOSURE_PASSES: BOOLEAN;
+  GR_STATE_SEQ: SEQ_TYPE;
+
+  procedure MAIN;
+  procedure INITIALIZE;
+  procedure INIT_MAKE_RTBL_ONE_ITEM(STATE_NBR: INTEGER; ITEM: TREE);
+  procedure INIT_CLOSE_RTBL_ONE_ITEM(STATE_NBR: INTEGER; ITEM:TREE);
+  procedure MAKE_RTBL_ONE_ITEM(STATE_NBR: INTEGER; ITEM: TREE);
+  procedure TRANS_CLOSE;
+  procedure TRANS_CLOSE_CLOSURE_ONE_ITEM(STATE_NBR: INTEGER; ITEM:TREE);
+  procedure TRANS_CLOSE_GOTO_ONE_ITEM (ITEM: TREE);
+  function GET_RULE_NBR(SYL_LIST: SEQ_TYPE) return INTEGER;
+
+  procedure MAIN is
+  begin
+    OPEN_DIANA;
+    GR_STATE_SEQ := LIST(D(XD_STATELIST, D(XD_USER_ROOT, CONST_ROOT)));
+    PUT_LINE("Initialize.");
+    INITIALIZE;
+    loop
+      MORE_PASSES := FALSE;
+      PUT_LINE("Trans close pass.");
+      TRANS_CLOSE;
+      exit
+	when not MORE_PASSES;
+    end loop;
+    CLOSE_DIANA;
+  end MAIN;
+
+  procedure INITIALIZE is
+    STATE_SEQ:		SEQ_TYPE := GR_STATE_SEQ;
+    STATE:		TREE;
+    STATE_NBR:		INTEGER;
+    ITEM_SEQ:		SEQ_TYPE;
+    ITEM:		TREE;
+  begin
+    for I in STBL'RANGE loop
+      declare
+	STBL_I: STBL_TYPE renames STBL(I);
+      begin
+	STBL_I.CHANGED := FALSE;
+	STBL_I.CLOSURE := FALSE; -- state has a closure item
+	STBL_I.STATE := CONST_VOID;
+      end;
+    end loop;
+    for I in RTBL'RANGE loop
+      RTBL(I).STATE_NBR := 0;
+    end loop;
+    while not IS_EMPTY(STATE_SEQ) loop
+      STATE := HEAD(STATE_SEQ); STATE_SEQ := TAIL(STATE_SEQ);
+      STATE_NBR := DI(XD_STATE_NBR, STATE);
+      PUT("Init");PUT(STATE_NBR);NEW_LINE;
+
+      STBL(STATE_NBR).STATE := STATE;
+
+      ITEM_SEQ := LIST(STATE);
+      while not IS_EMPTY(ITEM_SEQ) loop
+	ITEM := HEAD(ITEM_SEQ); ITEM_SEQ := TAIL(ITEM_SEQ);
+	INIT_MAKE_RTBL_ONE_ITEM(STATE_NBR, ITEM);
+      end loop;
+
+      if STBL(STATE_NBR).CLOSURE then
+	ITEM_SEQ := LIST(STATE);
+	while not IS_EMPTY(ITEM_SEQ) loop
+	  ITEM := HEAD(ITEM_SEQ); ITEM_SEQ := TAIL(ITEM_SEQ);
+	  INIT_CLOSE_RTBL_ONE_ITEM(STATE_NBR, ITEM);
+	end loop;
+      end if;
+    end loop;
+  end INITIALIZE;
+
+  procedure INIT_MAKE_RTBL_ONE_ITEM(STATE_NBR: INTEGER; ITEM: TREE) is
+    RULE:		TREE;
+    RULE_NBR:		INTEGER;
+    FOLLOW:		TREE;
+  begin
+    if DI(XD_SYL_NBR, ITEM) = 0 then
+      -- closure item
+      STBL(STATE_NBR).CLOSURE := TRUE;
+      RULE := D(XD_RULE, D(XD_ALTERNATIVE, ITEM));
+      RULE_NBR := DI(XD_RULE_NBR, D(XD_RULEINFO, RULE));
+      declare
+	RTBL_I: RTBL_TYPE renames RTBL(RULE_NBR);
+      begin
+	if RTBL_I.STATE_NBR /= STATE_NBR then
+	  -- have not already seen a closure item for this rule
+	  RTBL_I.STATE_NBR := STATE_NBR;
+	  RTBL_I.FOLLOW := MAKE(DN_TERMINAL_S);
+	  LIST(RTBL_I.FOLLOW, MAKE);
+	end if;
+	FOLLOW := RTBL_I.FOLLOW;
+      end;
+    else
+      -- basis item
+      FOLLOW := MAKE(DN_TERMINAL_S);
+      LIST(FOLLOW, MAKE);
+    end if;
+    D(XD_FOLLOW, ITEM, FOLLOW);
+  end INIT_MAKE_RTBL_ONE_ITEM;
+
+  procedure INIT_CLOSE_RTBL_ONE_ITEM(STATE_NBR: INTEGER; ITEM:TREE) is
+    SYL_LIST:	SEQ_TYPE := LIST(ITEM);
+    RULE_NBR:	INTEGER;
+    SYL:	TREE;
+    RULE:	TREE;
+    FOLLOW:	TREE;
+    FOLLOW_SEQ: SEQ_TYPE;
+    FOLLOW_SAVE:SEQ_TYPE;
+  begin
+    RULE_NBR := GET_RULE_NBR(SYL_LIST);
+    if RULE_NBR = 0 then
+      return;
+    end if;
+
+    SYL_LIST := TAIL(SYL_LIST);
+    if IS_EMPTY(SYL_LIST) then
+      return;
+    end if;
+
+    if RTBL(RULE_NBR).STATE_NBR /= STATE_NBR then
+      PUT("*** Rule table incorrect.");PUT(RULE_NBR);
+      PUT(RTBL(RULE_NBR).STATE_NBR);PUT(STATE_NBR);NEW_LINE;
+      return;
+    end if;
+
+    FOLLOW := RTBL(RULE_NBR).FOLLOW;
+    FOLLOW_SEQ := LIST(FOLLOW);
+    FOLLOW_SAVE := FOLLOW_SEQ;
+
+    loop
+      SYL := HEAD(SYL_LIST); SYL_LIST := TAIL(SYL_LIST);
+      if KIND(SYL) = DN_TERMINAL then
+	FOLLOW_SEQ := UNION(FOLLOW_SEQ, SYL);
+	exit;
+      else
+	RULE := D(XD_RULE, SYL);
+	if KIND(RULE) = DN_VOID then
+	  exit;
+	end if;
+	FOLLOW_SEQ := UNION(FOLLOW_SEQ, LIST(D(XD_RULEINFO, RULE)));
+	if not DB(XD_IS_NULLABLE, RULE) then
+	  exit;
+	end if;
+      end if;
+      exit
+	when IS_EMPTY(SYL_LIST);
+    end loop;
+    if not SAME(FOLLOW_SEQ, FOLLOW_SAVE) then
+      LIST(FOLLOW, FOLLOW_SEQ);
+      STBL(STATE_NBR).CHANGED := TRUE;
+    end if;
+  end INIT_CLOSE_RTBL_ONE_ITEM;
+
+  procedure TRANS_CLOSE is
+    STATE:	TREE;
+    RULE:	TREE;
+    RULE_NBR:	INTEGER;
+    ITEM:	TREE;
+    ITEM_SEQ:	 SEQ_TYPE;
+    ITEM_SUBSEQ: SEQ_TYPE;
+  begin
+    for STATE_NBR in STBL'RANGE loop
+      if STBL(STATE_NBR).CHANGED then
+	STBL(STATE_NBR).CHANGED := FALSE;
+	STATE := STBL(STATE_NBR).STATE;
+	ITEM_SEQ := LIST(STATE);
+	if STBL(STATE_NBR).CLOSURE then
+	  PUT("Cl ");PUT(STATE_NBR,1);NEW_LINE;
+	  ITEM_SUBSEQ := ITEM_SEQ;
+	  while not IS_EMPTY(ITEM_SUBSEQ) loop
+	    MAKE_RTBL_ONE_ITEM(STATE_NBR, HEAD(ITEM_SUBSEQ));
+	    ITEM_SUBSEQ := TAIL(ITEM_SUBSEQ);
+	  end loop;
+	  -- check all items once
+	  MORE_CLOSURE_PASSES := FALSE;
+	  ITEM_SUBSEQ := ITEM_SEQ;
+	  while not IS_EMPTY(ITEM_SUBSEQ) loop
+	    TRANS_CLOSE_CLOSURE_ONE_ITEM(STATE_NBR, HEAD(ITEM_SUBSEQ));
+	    ITEM_SUBSEQ := TAIL(ITEM_SUBSEQ);
+	  end loop;
+	  -- now check items that have been changed
+	  while MORE_CLOSURE_PASSES loop
+	    MORE_CLOSURE_PASSES := FALSE;
+	    ITEM_SUBSEQ := ITEM_SEQ;
+	    while not IS_EMPTY(ITEM_SUBSEQ) loop
+	      ITEM := HEAD(ITEM_SUBSEQ);
+	      if DI(XD_SYL_NBR,ITEM) /= 0 then
+		ITEM_SUBSEQ := TAIL(ITEM_SUBSEQ);
+	      else
+		RULE := D(XD_RULE, D(XD_ALTERNATIVE, ITEM));
+		RULE_NBR := DI(XD_RULE_NBR, D(XD_RULEINFO, RULE));
+		if RTBL(RULE_NBR).REQ_CHECK then
+		  RTBL(RULE_NBR).REQ_CHECK := FALSE;
+		  loop
+		    TRANS_CLOSE_CLOSURE_ONE_ITEM
+			  (STATE_NBR, ITEM);
+		    ITEM_SUBSEQ := TAIL(ITEM_SUBSEQ);
+		    exit
+		      when IS_EMPTY(ITEM_SUBSEQ);
+		    ITEM := HEAD(ITEM_SUBSEQ);
+		    exit
+		      when D(XD_RULE, D(XD_ALTERNATIVE, ITEM)) /= RULE;
+		  end loop;
+		else
+		  loop
+		    ITEM_SUBSEQ := TAIL(ITEM_SUBSEQ);
+		    exit
+		      when IS_EMPTY(ITEM_SUBSEQ);
+		    ITEM := HEAD(ITEM_SUBSEQ);
+		    exit
+		      when D(XD_RULE, D(XD_ALTERNATIVE, ITEM)) /= RULE;
+		  end loop;
+		end if;
+	      end if;
+	    end loop;
+	  end loop;
+	end if;
+	PUT("Goto ");PUT(STATE_NBR,1);NEW_LINE;
+	ITEM_SUBSEQ := ITEM_SEQ;
+	while not IS_EMPTY(ITEM_SUBSEQ) loop
+	  TRANS_CLOSE_GOTO_ONE_ITEM(HEAD(ITEM_SUBSEQ));
+	  ITEM_SUBSEQ := TAIL(ITEM_SUBSEQ);
+	end loop;
+      end if;
+    end loop;
+  end TRANS_CLOSE;
+
+  procedure MAKE_RTBL_ONE_ITEM(STATE_NBR: INTEGER; ITEM: TREE) is
+    RULE:		TREE;
+    RULE_NBR:		INTEGER;
+    FOLLOW:		TREE;
+  begin
+    if DI(XD_SYL_NBR, ITEM) = 0 then
+      -- closure item
+      RULE := D(XD_RULE, D(XD_ALTERNATIVE, ITEM));
+      RULE_NBR := DI(XD_RULE_NBR, D(XD_RULEINFO, RULE));
+      declare
+	RTBL_I: RTBL_TYPE renames RTBL(RULE_NBR);
+      begin
+	if RTBL_I.STATE_NBR /= STATE_NBR then
+	  -- have not already seen a closure item for this rule
+	  RTBL_I.STATE_NBR := STATE_NBR;
+	  RTBL_I.REQ_CHECK := FALSE;
+	  RTBL_I.FOLLOW := D(XD_FOLLOW, ITEM);
+	end if;
+      end;
+    end if;
+  end MAKE_RTBL_ONE_ITEM;
+
+  procedure TRANS_CLOSE_CLOSURE_ONE_ITEM(STATE_NBR: INTEGER; ITEM:TREE) is
+    SYL_LIST:	SEQ_TYPE := LIST(ITEM);
+    RULE_NBR:	INTEGER;
+    SYL:	TREE;
+    RULE:	TREE;
+    FOLLOW:	TREE;
+    FOLLOW_SEQ: SEQ_TYPE;
+    FOLLOW_SAVE:SEQ_TYPE;
+  begin
+    RULE_NBR := GET_RULE_NBR(SYL_LIST);
+    if RULE_NBR = 0 then
+      return;
+    end if;
+
+--@   PUT("Closing for state ");PUT(STATE_NBR,1);PUT(", rule ");PUT(RULE_NBR,1);
+--@   NEW_LINE;
+    if RTBL(RULE_NBR).STATE_NBR /= STATE_NBR then
+      PUT("*** Rule table incorrect.");PUT(RULE_NBR);
+      PUT(RTBL(RULE_NBR).STATE_NBR);PUT(STATE_NBR);NEW_LINE;
+      return;
+    end if;
+
+    loop
+      SYL_LIST := TAIL(SYL_LIST); -- can't be empty
+      exit
+	when IS_EMPTY(SYL_LIST);
+      SYL := HEAD(SYL_LIST);
+      if KIND(SYL) = DN_TERMINAL then
+--@	PUT_LINE("Terminal");
+	exit;
+      else
+	RULE := D(XD_RULE, SYL);
+--@--	PRINT_NODE(RULE);
+	if KIND(RULE) = DN_VOID then
+--@	  PUT_LINE("Null.");
+	  exit;
+	end if;
+	if not DB(XD_IS_NULLABLE, RULE) then
+--@	  PUT_LINE("Non-null");
+	  exit;
+	end if;
+      end if;
+    end loop;
+    if IS_EMPTY(SYL_LIST) then -- i.e., follow terminal can follow item
+--@     PUT_LINE("Syl list is empty.");
+      FOLLOW := RTBL(RULE_NBR).FOLLOW;
+      FOLLOW_SEQ := LIST(FOLLOW);
+      FOLLOW_SAVE := FOLLOW_SEQ;
+      FOLLOW_SEQ := UNION(FOLLOW_SEQ, LIST(D(XD_FOLLOW, ITEM)));
+
+      if not SAME(FOLLOW_SEQ, FOLLOW_SAVE) then
+--@	PUT_LINE("Changed.");
+	LIST(FOLLOW, FOLLOW_SEQ);
+	RTBL(RULE_NBR).REQ_CHECK := TRUE;
+	MORE_CLOSURE_PASSES := TRUE;
+      end if;
+--@--   PRINT_NODE(FOLLOW);
+    end if;
+  end TRANS_CLOSE_CLOSURE_ONE_ITEM;
+
+  procedure TRANS_CLOSE_GOTO_ONE_ITEM (ITEM: TREE) is
+    ALT_NBR :	 INTEGER;
+    SYL_NBR :	 INTEGER;
+    GOTO_STATE: 	TREE;
+    GOTO_ITEMSEQ:	SEQ_TYPE;
+    GOTO_ITEM:		TREE;
+    FOLLOW:		TREE;
+    FOLLOW_SEQ: 	SEQ_TYPE;
+    FOLLOW_SAVE:	SEQ_TYPE;
+  begin
+    GOTO_STATE := D(XD_GOTO, ITEM);
+    if KIND(GOTO_STATE) /= DN_VOID then
+      ALT_NBR := DI(XD_ALT_NBR, D(XD_ALTERNATIVE, ITEM));
+      SYL_NBR := DI(XD_SYL_NBR, ITEM) + 1;
+      GOTO_ITEMSEQ := LIST(GOTO_STATE);
+      loop
+	GOTO_ITEM := HEAD(GOTO_ITEMSEQ);
+	exit
+	  when DI(XD_ALT_NBR, D(XD_ALTERNATIVE, GOTO_ITEM)) = ALT_NBR
+	  and then DI(XD_SYL_NBR, GOTO_ITEM) = SYL_NBR;
+	GOTO_ITEMSEQ := TAIL(GOTO_ITEMSEQ);
+	-- never empty, because desired item is in go to state
+      end loop;
+      FOLLOW := D(XD_FOLLOW,GOTO_ITEM);
+      FOLLOW_SAVE := LIST(FOLLOW);
+      FOLLOW_SEQ := UNION(FOLLOW_SAVE, LIST(D(XD_FOLLOW, ITEM)));
+      if not SAME(FOLLOW_SEQ, FOLLOW_SAVE) then
+	MORE_PASSES := TRUE;
+	STBL(DI(XD_STATE_NBR,GOTO_STATE)).CHANGED := TRUE;
+	LIST(FOLLOW, FOLLOW_SEQ);
+      end if;
+    end if;
+  end TRANS_CLOSE_GOTO_ONE_ITEM;
+
+  function GET_RULE_NBR(SYL_LIST: SEQ_TYPE) return INTEGER is
+    SYL:	TREE;
+    RULE:	TREE;
+  begin
+    if IS_EMPTY(SYL_LIST) then
+      return 0;
+    end if;
+    SYL := HEAD(SYL_LIST);
+    if KIND(SYL) /= DN_NONTERMINAL then
+      return 0;
+    end if;
+    RULE := D(XD_RULE, SYL);
+    if KIND(RULE) = DN_VOID then
+      return 0;
+    end if;
+    return DI(XD_RULE_NBR, D(XD_RULEINFO, RULE));
+  end GET_RULE_NBR;
+
+begin
+  PUT("Begin LALRGRMR");
+  MAIN;
+end LALRGRMR;

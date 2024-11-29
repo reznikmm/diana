@@ -1,0 +1,91 @@
+package USERPK is
+
+-- Package USERPK provides the following items (see page DIANACONCRETE):
+
+-- source_position:   Defines source position in original source program.
+--		      Used for error messages.
+-- symbol_rep:	      Representation of identifiers, strings and characters.
+-- value:	      Implementation defined.
+--			  Gives value of an expression.
+--			  Can indicate that no value is computed
+-- operator:	      Enumeration type for all operators.
+-- number_rep:	      Representation of numeric literals.
+-- comments:	      Representation of comments from source program.
+
+   DEBUG: BOOLEAN := FALSE;	-- debug-mode flag for compiler
+
+   type BYTE is range 0 .. 16#FF#;
+   for BYTE'SIZE use 8;
+
+   type SHORT is range -16#8000# .. 16#7FFF#;
+   for SHORT'SIZE use 16;
+
+   type LONG is range -16#8000_0000# .. 16#7FFF_FFFF#; -- INTEGER may be 16 bit
+
+   MAX_STRING: constant := 127; -- max characters in variable string
+   type PNAME is limited private; -- variable string
+
+   type TREE is record
+      TPG: SHORT;
+      TTY: BYTE;
+      TLN: BYTE;
+   end record;
+
+   subtype SOURCE_POSITION     is TREE;
+	-- with TPG < 0, column in TTY
+   --subtype VALUE	       is TREE;
+   --subtype OPERATOR	       is TREE;
+   --subtype NUMBER_REP        is TREE;
+   --subtype COMMENTS	       is TREE;
+
+   -- list structure.  empty list is NIL; unary list is item
+   type SEQ_TYPE is
+     record
+       H: TREE;
+       T: TREE;
+     end record;
+
+   -- Work file pages
+   SECTOR_SIZE: constant := 128;  -- number of TREE's
+   subtype LINE_DES is INTEGER range 0 .. SECTOR_SIZE;
+   subtype LINE_NBR is INTEGER range 1 .. SECTOR_SIZE;
+   type SECTOR is array(LINE_NBR) of TREE;
+
+   -- Exceptions
+   ASSERTION_ERROR: exception;
+
+   -- Arities type definition (Here instead of diana because DIANAMAN uses it)
+   type ARITIES is (NULLARY, UNARY, BINARY, TERNARY, ARBITRARY);
+
+   procedure SET(A: out PNAME; TO: PNAME);
+   procedure SET(A: out PNAME; TO: STRING);
+   procedure SET(A: out PNAME; TO: CHARACTER);
+
+   function LENGTH(A: PNAME) return NATURAL;
+   function TO_STRING(A: PNAME) return STRING;
+
+   procedure PUT(ITEM: in PNAME);
+   procedure PUT_LINE(ITEM: in PNAME);
+
+   function "&" (LEFT: PNAME    ; RIGHT: PNAME    ) return STRING;
+   function "&" (LEFT: PNAME    ; RIGHT: STRING   ) return STRING;
+   function "&" (LEFT: STRING   ; RIGHT: PNAME    ) return STRING;
+   function "&" (LEFT: PNAME    ; RIGHT: CHARACTER) return STRING;
+   function "&" (LEFT: CHARACTER; RIGHT: PNAME    ) return STRING;
+
+   function "="(LEFT, RIGHT: PNAME) return BOOLEAN;
+   function IS_EQUAL(LEFT: STRING; RIGHT: PNAME) return BOOLEAN;
+   function IS_EQUAL(LEFT: PNAME; RIGHT: STRING) return BOOLEAN;
+
+   procedure QUIT(MSG: STRING);  -- abort with message
+
+private
+
+  -- varying string -- character 0 is the current length
+  type PNAME is 
+    record
+      LEN: BYTE;
+      BDY: STRING(1 .. MAX_STRING);
+    end record;
+
+end USERPK;

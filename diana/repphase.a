@@ -1,0 +1,63 @@
+with TEXT2_IO, USERPK, DIANA, DIANATTR, DIANAMAN;
+use  TEXT2_IO, USERPK, DIANA, DIANATTR, DIANAMAN;
+procedure REPPHASE is
+  IFILE:	FILE_TYPE; -- Ada source file
+  --OFILE:	FILE_TYPE; -- Source with error messages
+  LINE_COUNT:	NATURAL := 0;
+  SLINE:	STRING(1 .. MAX_STRING);   -- text of the current line
+  LAST: 	NATURAL;   -- length of line read
+  COL:		NATURAL;   -- column with error
+
+  USER_ROOT:	TREE;
+  SOURCE_LIST:	SEQ_TYPE;  -- list of source line records
+  SOURCELINE:	TREE;
+  SOURCEPOS:	TREE;	   -- (really a SOURCE_POSITION)
+  SOURCENBR:	INTEGER:=0;-- line number from list
+  ERRORLIST:	SEQ_TYPE;
+  ERROR:	TREE;
+begin
+  OPEN_DIANA;
+  USER_ROOT := D(XD_USER_ROOT,CONST_ROOT);
+
+  OPEN (IFILE, IN_FILE, PRINTNAME(DABS(1,USER_ROOT)));
+  --CREATE (OFILE, OUT_FILE, "$$$REP.TMP");
+
+  SOURCE_LIST := LIST(CONST_ROOT);
+  loop
+    if IS_EMPTY(SOURCE_LIST) then
+      SOURCENBR := INTEGER'LAST;
+      ERRORLIST := MAKE;
+    else
+      SOURCELINE := HEAD(SOURCE_LIST);
+      SOURCE_LIST := TAIL(SOURCE_LIST);
+      SOURCENBR := DI(XD_NUMBER,SOURCELINE);
+      ERRORLIST := LIST(SOURCELINE);
+    end if;
+    while LINE_COUNT < SOURCENBR and then not END_OF_FILE(IFILE) loop
+      LINE_COUNT := LINE_COUNT + 1;
+      put(line_count,1); put(':');
+      if END_OF_LINE(IFILE) then
+	SKIP_LINE(IFILE);
+	NEW_LINE;
+      else
+	put(ascii.ht);
+	GET_LINE(IFILE,SLINE,LAST);
+	PUT_LINE(SLINE(1..LAST));
+      end if;
+    end loop;
+    while not IS_EMPTY(ERRORLIST) loop
+      ERROR := HEAD(ERRORLIST);
+      ERRORLIST := TAIL(ERRORLIST);
+      PUT("==> ");
+      PUT(GET_SOURCE_COL(D(XD_SRCPOS,ERROR)),1);
+      PUT(": ");PUT_LINE(PRINTNAME(D(XD_TEXT,ERROR)));
+    end loop;
+    exit
+      when SOURCENBR = INTEGER'LAST;
+  end loop;
+
+  CLOSE(IFILE);
+  -- close(ofile); -- not closed to avoid extra form feed
+  -- close_diana;  -- not closed; no changes made
+
+end REPPHASE;

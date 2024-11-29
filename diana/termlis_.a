@@ -1,0 +1,9 @@
+with USERPK; use USERPK;
+package TERMLIST is
+  function SAME(L1, L2: SEQ_TYPE) return BOOLEAN; -- Lists have same rep
+  function UNION (L1: SEQ_TYPE; V: TREE) return SEQ_TYPE; -- TERMINAL only
+  function UNION (L1: SEQ_TYPE; L2: SEQ_TYPE) return SEQ_TYPE;
+  function MEMBER (L1: SEQ_TYPE; V: TREE) return BOOLEAN;
+  function R_UNION (L1: SEQ_TYPE; V: TREE) return SEQ_TYPE; -- RULE only
+  function R_UNION (L1: SEQ_TYPE; L2: SEQ_TYPE) return SEQ_TYPE;
+end TERMLIST;

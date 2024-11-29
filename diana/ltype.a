@@ -1,0 +1,44 @@
+package body LTYPE is
+
+  function LEX_IMAGE (TY: LEXTYPE) return STRING is
+    TEMP_STRING : STRING(1 .. 2);
+    II: INTEGER;
+
+    OP_TEXT : constant STRING (1 .. 52) :=
+        "& ' ( ) * + , - . / : ; < = > | =>..**:=/=>=<=<<>><>";
+
+    function TRIM_3(A: STRING) return STRING is
+      RSLT: STRING(1 .. A'LENGTH - 3);
+    begin
+      RSLT := A(4 .. A'LENGTH);
+      return RSLT;
+    end;
+
+  begin -- function LEX_IMAGE
+    case TY is
+    when LT_ABORT .. LT_XOR =>
+      return TRIM_3(LEXTYPE'IMAGE(TY));
+    when LT_AMPERSAND .. LT_BOX =>
+      II := LEXTYPE'POS(TY) * 2 - LEXTYPE'POS(LT_AMPERSAND) * 2 + 1;
+      TEMP_STRING := OP_TEXT(II .. II+1);
+      if TEMP_STRING(2) = ' ' then
+        return TEMP_STRING(1 .. 1);
+      else
+        return TEMP_STRING(1 .. 2);
+      end if;
+    when LT_IDENTIFIER =>
+      return "identifier";
+    when LT_NUMERIC_LIT =>
+      return "numeric_literal";
+    when LT_STRING_LIT =>
+      return "string_literal";
+    when LT_CHAR_LIT =>
+      return "character_literal";
+    when LT_END_MARK =>
+      return "*END*";
+    when LT_ERROR =>
+      return "*ERROR*";
+    end case;
+  end LEX_IMAGE;
+
+end LTYPE;

@@ -1,0 +1,35 @@
+with USERPK; use USERPK;
+with DIANA; use DIANA;
+with SEMGLOB; use SEMGLOB;
+
+package NODWALK is
+
+    type S_TYPE is
+	record
+	    SB: SB_TYPE;
+	    SU: SU_TYPE;
+	end record;
+
+    procedure WALK(NODE: TREE; H: H_TYPE);
+
+    procedure FINISH_PARAM_S(DECL_S: TREE; H: H_TYPE);
+
+    function WALK_NAME(ID_KIND: NODE_NAME; NAME: TREE) return TREE;
+
+    function WALK_TYPE_MARK(NAME: TREE) return TREE;
+
+    procedure WALK_DISCRETE_CHOICE_S(CHOICE_S: TREE; TYPE_SPEC: TREE);
+
+    procedure ENTER_REGION(DEF: TREE; H: in out H_TYPE; S: out S_TYPE);
+
+    procedure LEAVE_REGION(DEF: TREE; S: S_TYPE);
+
+    procedure ENTER_BODY(DEF: TREE; H: in out H_TYPE; S: out S_TYPE);
+
+    procedure LEAVE_BODY(DEF: TREE; S: S_TYPE);
+
+    procedure WALK_ITEM_S (ITEM_S: TREE; H: H_TYPE);
+
+    procedure WALK_SOURCE_NAME_S(SOURCE_NAME_S: TREE; H: H_TYPE);
+
+end NODWALK;

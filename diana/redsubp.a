@@ -1,0 +1,1599 @@
+with TEXT2_IO; use TEXT2_IO;
+with DIANA, DIANAMAN, DIANATTR; use DIANA, DIANAMAN, DIANATTR;
+
+with VISUTIL; use VISUTIL;
+with EXPTYPE, EXPRESO; use EXPTYPE, EXPRESO;
+with DEFUTIL; use DEFUTIL;
+with MAKENOD; use MAKENOD;
+with SETUTIL; use SETUTIL;
+with REQUTIL; use REQUTIL;
+with DEFWALK; use DEFWALK;
+with PRENAME, UARITH;
+with ATTWALK; use ATTWALK;
+with AGGRESO; use AGGRESO;
+
+package body REDSUBP is
+
+    type ACTUAL_TYPE is
+	record
+	    SYM:	  TREE;
+	    EXP:	    TREE;
+	    TYPESET:	    TYPESET_TYPE;
+	end record;
+
+    type ACTUAL_ARRAY_TYPE is array (POSITIVE range <>) of ACTUAL_TYPE;
+
+
+    function LENGTH(LIST: SEQ_TYPE) return NATURAL;
+
+    function GET_FUNCTION_RESULT_SUBTYPE(NAME_DEFINTERP: DEFINTERP_TYPE)
+	    return TREE;
+
+    function GET_APPLY_NAME_RESULT_TYPE(NAME_DEFINTERP: DEFINTERP_TYPE)
+	    return TREE;
+
+    function STATIC_OP_VALUE(OP_ID: TREE; NORM_PARAM_S: TREE) return TREE;
+
+    function RESOLVE_SLICE
+	    (NAME: TREE; DISCRETE_RANGE: TREE; TYPE_SPEC: TREE) return TREE;
+
+    function RESOLVE_INDEXED(EXP: TREE) return TREE;
+
+    function RESOLVE_CONVERSION(EXP: TREE; SUBTYPE_ID: TREE) return TREE;
+
+    procedure REDUCE_APPLY_NAMES
+		( NAME: 	TREE
+		; NAME_DEFSET:	in out DEFSET_TYPE
+		; GEN_ASSOC_S:	TREE
+		; INDEX:	TREE := CONST_VOID
+		; IS_SLICE_OUT: out BOOLEAN );
+
+    procedure CHECK_ACTUAL_LIST
+			( HEADER:	TREE
+			; ACTUAL:	ACTUAL_ARRAY_TYPE
+			; ACTUALS_OK:	out BOOLEAN
+			; EXTRAINFO:	out EXTRAINFO_TYPE );
+
+    procedure CHECK_SUBSCRIPT_LIST
+			( ARRAY_TYPE:	TREE
+			; ACTUAL:	ACTUAL_ARRAY_TYPE
+			; ACTUALS_OK:	out BOOLEAN
+			; EXTRAINFO:	out EXTRAINFO_TYPE );
+
+    procedure REDUCE_ARRAY_PREFIX_TYPES
+		( NAME: 	TREE
+		; NAME_TYPESET: in out TYPESET_TYPE
+		; GEN_ASSOC_S:	TREE
+		; IS_SLICE_OUT: out BOOLEAN );
+
+    function RESOLVE_EXP_OR_UNIV_FIXED(EXP: TREE; TYPE_SPEC: TREE) return TREE;
+
+    function RESOLVE_SUBSCRIPTS
+		( ARRAY_TYPE:		TREE
+		; GENERAL_ASSOC_S:	TREE)
+	     return TREE;
+
+    function GET_ARRAY_COMPONENT_TYPE(TYPE_SPEC: TREE) return TREE;
+
+    --======================================================================
+
+    function LENGTH(LIST: SEQ_TYPE) return NATURAL is
+	-- gives length of a seq_type
+	LIST_TAIL: SEQ_TYPE := LIST;
+	COUNT: NATURAL := 0;
+    begin
+	while not IS_EMPTY(LIST_TAIL) loop
+	    LIST_TAIL := TAIL(LIST_TAIL);
+	    COUNT := COUNT + 1;
+	end loop;
+	return COUNT;
+    end LENGTH;
+
+
+    procedure EVAL_SUBP_CALL
+		( EXP:		TREE
+		; TYPESET:	out TYPESET_TYPE )
+    is
+	-- evaluates possible result types of apply construct
+
+	NAME:		TREE := D(AS_NAME, EXP);
+	GEN_ASSOC_S:	constant TREE := D(AS_GENERAL_ASSOC_S, EXP);
+	DESIGNATOR:	TREE := CONST_VOID;
+
+	NAME_DEFSET:	DEFSET_TYPE;
+	NAME_DEFINTERP: DEFINTERP_TYPE;
+	NAME_TYPESET:	TYPESET_TYPE;
+	NAME_TYPEINTERP:TYPEINTERP_TYPE;
+	NAME_STRUCT:	TREE;
+	NEW_TYPESET:	TYPESET_TYPE := EMPTY_TYPESET;
+	IS_SLICE:	BOOLEAN;
+    begin
+	if KIND(NAME) = DN_STRING_LITERAL then
+	    NAME := MAKE_USED_OP_FROM_STRING(NAME);
+	end if;
+
+	-- if prefix is simple or selected name
+	if KIND(NAME) = DN_SELECTED
+	or KIND(NAME) in CLASS_DESIGNATOR then
+	    FIND_VISIBILITY(NAME, NAME_DEFSET);
+	    if not IS_EMPTY(NAME_DEFSET) then
+		if IS_TYPE_DEF(GET_DEF(HEAD(NAME_DEFSET))) then
+		    -- conversion
+		    ADD_TO_TYPESET
+				( NEW_TYPESET
+				, GET_BASE_TYPE(GET_THE_ID(NAME_DEFSET)) );
+		    STASH_DEFSET(NAME, NAME_DEFSET);
+		else
+		    REQUIRE_FUNCTION_OR_ARRAY_DEF(NAME, NAME_DEFSET);
+		    REDUCE_APPLY_NAMES(NAME, NAME_DEFSET, GEN_ASSOC_S
+				, IS_SLICE_OUT => IS_SLICE );
+		    REDUCE_OPERATOR_DEFS(EXP, NAME_DEFSET);
+		    STASH_DEFSET(NAME, NAME_DEFSET);
+		    while not IS_EMPTY(NAME_DEFSET) loop
+			POP(NAME_DEFSET, NAME_DEFINTERP);
+			declare
+			    RESULT_TYPE: TREE;
+			begin
+			    if IS_SLICE then
+				RESULT_TYPE := GET_BASE_STRUCT
+					( D(XD_SOURCE_NAME
+						, GET_DEF(NAME_DEFINTERP) ));
+				if KIND(RESULT_TYPE) = DN_ACCESS then
+				    RESULT_TYPE := GET_BASE_TYPE
+					    ( D(SM_DESIG_TYPE,RESULT_TYPE) );
+				else
+				    RESULT_TYPE := GET_BASE_TYPE(RESULT_TYPE);
+				end if;
+			    else
+				RESULT_TYPE := GET_APPLY_NAME_RESULT_TYPE
+					( NAME_DEFINTERP );
+			    end if;
+			    ADD_TO_TYPESET
+				    ( NEW_TYPESET
+				    , RESULT_TYPE
+				    , GET_EXTRAINFO(NAME_DEFINTERP) );
+			end;
+		    end loop;
+		end if;
+	    else
+                -- (Following forces param to be eval'ed, even tho no fcn)
+		REDUCE_APPLY_NAMES(NAME, NAME_DEFSET, GEN_ASSOC_S);
+		STASH_DEFSET(NAME, NAME_DEFSET);
+	    end if;
+
+	-- else -- since prefix is not simple or selected name
+	else
+
+	    -- prefix must be expression appropriate for array type
+	    EVAL_EXP_TYPES(NAME, NAME_TYPESET);
+	    REDUCE_ARRAY_PREFIX_TYPES
+			(NAME, NAME_TYPESET, GEN_ASSOC_S, IS_SLICE);
+	    STASH_TYPESET(NAME, NAME_TYPESET);
+	    while not IS_EMPTY(NAME_TYPESET) loop
+		POP(NAME_TYPESET, NAME_TYPEINTERP);
+		NAME_STRUCT := GET_BASE_STRUCT(GET_TYPE(NAME_TYPEINTERP));
+		if KIND(NAME_STRUCT) = DN_ACCESS then
+		    NAME_STRUCT
+			    := GET_BASE_STRUCT(D(SM_DESIG_TYPE,NAME_STRUCT));
+		end if;
+		if IS_SLICE then
+		    ADD_TO_TYPESET
+			    ( NEW_TYPESET
+			    , GET_BASE_TYPE(NAME_STRUCT)
+			    , GET_EXTRAINFO(NAME_TYPEINTERP) );
+		else
+		    ADD_TO_TYPESET
+			    ( NEW_TYPESET
+			    , GET_BASE_TYPE(D(SM_COMP_TYPE, NAME_STRUCT))
+			    , GET_EXTRAINFO(NAME_TYPEINTERP) );
+		end if;
+	    end loop;
+	end if;
+
+	-- return the new typeset
+	TYPESET := NEW_TYPESET;
+    end EVAL_SUBP_CALL;
+
+
+    function GET_FUNCTION_RESULT_SUBTYPE(NAME_DEFINTERP: DEFINTERP_TYPE)
+	    return TREE
+    is
+	RESULT_TYPE: TREE := D(AS_NAME, D(XD_HEADER, GET_DEF(NAME_DEFINTERP)));
+	TYPE_MARK_DEFN: TREE;
+    begin
+	if KIND(RESULT_TYPE) in CLASS_TYPE_SPEC then
+	    return RESULT_TYPE;
+	else
+	    if KIND(RESULT_TYPE) = DN_SELECTED then
+		TYPE_MARK_DEFN := D(SM_DEFN, D(AS_DESIGNATOR,RESULT_TYPE));
+	    else
+		TYPE_MARK_DEFN := D(SM_DEFN, RESULT_TYPE);
+	    end if;
+	    if TYPE_MARK_DEFN = CONST_VOID then
+		return CONST_VOID;
+	    else
+		return D(SM_TYPE_SPEC, TYPE_MARK_DEFN);
+	    end if;
+	end if;
+    end GET_FUNCTION_RESULT_SUBTYPE;
+
+
+    function GET_APPLY_NAME_RESULT_TYPE(NAME_DEFINTERP: DEFINTERP_TYPE)
+	    return TREE
+    is
+	NAME_ID: TREE := D(XD_SOURCE_NAME, GET_DEF(NAME_DEFINTERP));
+    begin
+	case KIND(NAME_ID) is
+	when DN_TYPE_ID | DN_SUBTYPE_ID
+			| DN_PRIVATE_TYPE_ID | DN_L_PRIVATE_TYPE_ID =>
+	    return GET_BASE_TYPE(NAME_ID);
+	when DN_FUNCTION_ID | DN_GENERIC_ID =>
+	    if IS_NULLARY(NAME_DEFINTERP) then
+		return GET_ARRAY_COMPONENT_TYPE(D(AS_NAME, D(SM_SPEC,NAME_ID)));
+	    else
+		return GET_BASE_TYPE(D(AS_NAME, D(SM_SPEC, NAME_ID)));
+	    end if;
+	when DN_OPERATOR_ID | DN_BLTN_OPERATOR_ID =>
+	    return GET_BASE_TYPE
+			( D(AS_NAME, D(XD_HEADER, GET_DEF(NAME_DEFINTERP))) );
+	    --$$$ worry about extra info and boolean valued ops
+	when others =>
+	    -- $$$ must be expression
+	    return GET_ARRAY_COMPONENT_TYPE(D(SM_OBJ_TYPE, NAME_ID));
+	end case;
+    end GET_APPLY_NAME_RESULT_TYPE;
+
+
+    function RESOLVE_FUNCTION_CALL(EXP: TREE; TYPE_SPEC: TREE) return TREE is
+	NAME: TREE := D(AS_NAME, EXP);
+	GENERAL_ASSOC_S: TREE := D(AS_GENERAL_ASSOC_S, EXP);
+
+	DEFSET: DEFSET_TYPE;
+	DEFINTERP: DEFINTERP_TYPE;
+	NAME_DEF:  TREE;
+	NAME_ID:   TREE;
+	NEW_DEFSET: DEFSET_TYPE := EMPTY_DEFSET;
+	DEF: TREE;
+	DEF_ID: TREE;
+        ORIG_DEF_ID: TREE; -- def_id prior to renaming
+    begin
+	if DEBUG then
+            PUT("Resolve_Function_Call ... ");
+            PUT(NODE_REP(EXP)); PUT(" "); PUT_LINE(NODE_REP(TYPE_SPEC));
+	end if;
+
+	-- if slice, resolve and return slice
+	if not IS_EMPTY(LIST(GENERAL_ASSOC_S))
+	and then KIND(HEAD(LIST(GENERAL_ASSOC_S))) in CLASS_DISCRETE_RANGE then
+	    return RESOLVE_SLICE(NAME, HEAD(LIST(GENERAL_ASSOC_S)), TYPE_SPEC);
+	end if;
+
+	-- if prefix is simple or selected name
+	if KIND(NAME) = DN_SELECTED
+	or KIND(NAME) in CLASS_DESIGNATOR then
+	    DEFSET := FETCH_DEFSET(NAME);
+	    if IS_EMPTY(DEFSET) then
+		null;
+	    elsif IS_TYPE_DEF(GET_DEF(HEAD(DEFSET))) then
+		-- must be conversion
+		NEW_DEFSET := DEFSET;
+	    elsif TYPE_SPEC /= CONST_VOID then
+		while not IS_EMPTY(DEFSET) loop
+		    POP(DEFSET, DEFINTERP);
+		    if DEBUG then
+                        PUT("... "); PUT(NODE_REP(GET_DEF(DEFINTERP)));
+                        PUT(" ");
+                        PUT(BOOLEAN'IMAGE(GET_EXTRAINFO(DEFINTERP)
+				= NULL_EXTRAINFO));
+                        PUT(" ");
+                        PUT(BOOLEAN'IMAGE(IS_NULLARY(DEFINTERP)));
+                        PUT(" ");
+			PUT_LINE(PRINTNAME
+			   (D(LX_SYMREP,D(XD_SOURCE_NAME,GET_DEF(DEFINTERP)))));
+		    end if;
+		    if GET_APPLY_NAME_RESULT_TYPE(DEFINTERP) = TYPE_SPEC
+		    or else (KIND(TYPE_SPEC) = DN_UNIVERSAL_FIXED
+			    and then KIND(GET_BASE_STRUCT
+					(GET_APPLY_NAME_RESULT_TYPE(DEFINTERP)))
+				    = DN_FIXED)
+		    then
+			ADD_TO_DEFSET(NEW_DEFSET, DEFINTERP);
+			if DEBUG then
+                            PUT_LINE("... -- kept");
+			end if;
+		    end if;
+		end loop;
+		if IS_EMPTY(NEW_DEFSET) then
+                    ERROR(D(LX_SRCPOS,NAME), "**** No valid defs in resolve");
+		end if;
+	    end if;
+
+	    REQUIRE_UNIQUE_DEF(NAME, NEW_DEFSET);
+
+	    DEF_ID := GET_THE_ID(NEW_DEFSET);
+	    NAME := RESOLVE_NAME(NAME, DEF_ID);
+	    D(AS_NAME, EXP, NAME);
+
+	    if IS_EMPTY(NEW_DEFSET) then
+		RESOLVE_ERRONEOUS_PARAM_S(GENERAL_ASSOC_S);
+		D(SM_EXP_TYPE, EXP, CONST_VOID);
+		return EXP;
+
+	    else
+		if DEBUG then
+                    PUT("... selected ");PUT_LINE(NODE_REP(DEF_ID));
+		end if;
+                case CLASS_DEF_NAME'(KIND(DEF_ID)) is
+		when CLASS_OBJECT_NAME =>
+		    return RESOLVE_INDEXED(EXP);
+
+		when CLASS_TYPE_NAME =>
+		    -- must be a conversion
+		    return RESOLVE_CONVERSION(EXP, DEF_ID);
+
+		when DN_FUNCTION_ID | DN_GENERIC_ID
+			| DN_BLTN_OPERATOR_ID | DN_OPERATOR_ID =>
+		    if IS_NULLARY(HEAD(NEW_DEFSET)) then
+			NAME := MAKE_FUNCTION_CALL
+				    ( LX_SRCPOS => D(LX_SRCPOS, NAME)
+				    , AS_NAME => NAME
+				    , AS_GENERAL_ASSOC_S => MAKE_GENERAL_ASSOC_S
+					    ( LX_SRCPOS => D(LX_SRCPOS, NAME)
+					    , LIST => MAKE )
+				    , SM_EXP_TYPE => GET_FUNCTION_RESULT_SUBTYPE
+					    ( HEAD(NEW_DEFSET) ) );
+			-- make normalized_param_s for the default params
+			D(SM_NORMALIZED_PARAM_S
+				, NAME
+				, RESOLVE_SUBP_PARAMETERS
+					  ( GET_DEF(HEAD(NEW_DEFSET))
+					  , D(AS_GENERAL_ASSOC_S, NAME) ) );
+			D(AS_NAME, EXP, NAME);
+			return RESOLVE_INDEXED(EXP);
+		    else
+			D(SM_EXP_TYPE
+				, EXP
+				, GET_FUNCTION_RESULT_SUBTYPE
+					( HEAD(NEW_DEFSET) ) );
+			D(SM_NORMALIZED_PARAM_S
+				, EXP
+				, RESOLVE_SUBP_PARAMETERS
+					  ( GET_DEF(HEAD(NEW_DEFSET))
+					  , GENERAL_ASSOC_S ) );
+                        -- walk back thru renames - look for built in op
+                        ORIG_DEF_ID := DEF_ID;
+                        if KIND(ORIG_DEF_ID) = DN_OPERATOR_ID then
+                            while KIND(ORIG_DEF_ID) in DN_FUNCTION_ID .. DN_OPERATOR_ID
+                            and then KIND(D(SM_UNIT_DESC,ORIG_DEF_ID))
+                                        = DN_RENAMES_UNIT
+                            loop
+                                ORIG_DEF_ID := D( AS_NAME
+                                                , D(SM_UNIT_DESC,ORIG_DEF_ID) );
+                                if KIND(ORIG_DEF_ID) = DN_SELECTED then
+                                    ORIG_DEF_ID := D(AS_DESIGNATOR,ORIG_DEF_ID);
+                                end if;
+                                ORIG_DEF_ID := D(SM_DEFN,ORIG_DEF_ID);
+                            end loop;
+                        end if;
+			if KIND(ORIG_DEF_ID) = DN_BLTN_OPERATOR_ID then
+			    D(SM_VALUE
+				    , EXP
+				    , STATIC_OP_VALUE
+					    ( ORIG_DEF_ID
+					    , D(SM_NORMALIZED_PARAM_S,EXP)));
+			end if;
+			return EXP;
+		    end if;
+
+		when others =>
+                    QUIT("Resolve_function_call: invalid name");
+		end case;
+	    end if;
+
+	elsif KIND(NAME) = DN_ATTRIBUTE then
+	    return RESOLVE_ATTRIBUTE(EXP);
+
+        --(Changed 6/13/90.  Don't know why this was here; caused
+        --failure on e.g. INTEGER'IMAGE(12)(2) .)
+	--elsif KIND(NAME) = DN_FUNCTION_CALL
+	--and then KIND(D(AS_NAME,NAME)) = DN_ATTRIBUTE then
+	--    return RESOLVE_ATTRIBUTE(EXP);
+
+	else
+	    declare
+		NAME_TYPESET: TYPESET_TYPE := FETCH_TYPESET(NAME);
+		NAME_TYPEINTERP: TYPEINTERP_TYPE;
+		NAME_STRUCT: TREE;
+		NEW_TYPESET: TYPESET_TYPE := EMPTY_TYPESET;
+	    begin
+		while not IS_EMPTY(NAME_TYPESET) loop
+		    POP(NAME_TYPESET, NAME_TYPEINTERP);
+		    NAME_STRUCT
+			    := GET_BASE_STRUCT(GET_TYPE(NAME_TYPEINTERP));
+		    if KIND(NAME_STRUCT) = DN_ACCESS then
+			NAME_STRUCT := GET_BASE_STRUCT
+				( D(SM_DESIG_TYPE, NAME_STRUCT) );
+		    end if;
+		    if GET_BASE_TYPE(D(SM_COMP_TYPE, NAME_STRUCT))
+				= TYPE_SPEC
+		    or else ( KIND(TYPE_SPEC) = DN_UNIVERSAL_FIXED
+			    and then KIND(GET_BASE_STRUCT
+					(D(SM_COMP_TYPE, NAME_STRUCT)))
+				    = DN_FIXED )
+		    then
+			ADD_TO_TYPESET(NEW_TYPESET, NAME_TYPEINTERP);
+		    end if;
+		end loop;
+		NAME := RESOLVE_EXP(NAME, NEW_TYPESET);
+		D(AS_NAME, EXP, NAME);
+	    end;
+	    return RESOLVE_INDEXED(EXP);
+	end if;
+
+    end RESOLVE_FUNCTION_CALL;
+
+
+    function STATIC_OP_VALUE(OP_ID: TREE; NORM_PARAM_S: TREE) return TREE is
+	use UARITH;
+	use PRENAME;
+
+	PARAM_TAIL:	SEQ_TYPE := LIST(NORM_PARAM_S);
+	FIRST_PARAM:	TREE;
+	FIRST_VALUE:	TREE;
+	SECOND_VALUE:	TREE;
+    begin
+	-- get the first parameter and its value
+	POP(PARAM_TAIL, FIRST_PARAM);
+	FIRST_VALUE := GET_STATIC_VALUE(FIRST_PARAM);
+
+	-- if first parameter is not static
+	if FIRST_VALUE = CONST_VOID then
+
+	    -- no value; return
+	    return CONST_VOID;
+	end if;
+
+	-- if there is a second parameter
+	if not IS_EMPTY(PARAM_TAIL) then
+
+	    -- get its value
+	    SECOND_VALUE := GET_STATIC_VALUE(HEAD(PARAM_TAIL));
+
+	    -- if second parameter is not static
+	    if SECOND_VALUE = CONST_VOID then
+
+		-- no value; return
+		return CONST_VOID;
+	    end if;
+	end if;
+
+        case OP_CLASS'VAL(DI(SM_OPERATOR, OP_ID)) is
+	when OP_AND =>
+	    return FIRST_VALUE and SECOND_VALUE;
+	when OP_OR =>
+	    return FIRST_VALUE or SECOND_VALUE;
+	when OP_XOR =>
+	    return FIRST_VALUE xor SECOND_VALUE;
+	when OP_NOT =>
+	    return not FIRST_VALUE;
+	when OP_UNARY_PLUS =>
+	    return FIRST_VALUE;
+	when OP_UNARY_MINUS =>
+	    return - FIRST_VALUE;
+	when OP_ABS =>
+	    return abs FIRST_VALUE;
+	when OP_EQ =>
+	    return U_EQUAL(FIRST_VALUE, SECOND_VALUE);
+	when OP_NE =>
+	    return U_NOT_EQUAL(FIRST_VALUE, SECOND_VALUE);
+	when OP_LT =>
+	    return FIRST_VALUE < SECOND_VALUE;
+	when OP_LE =>
+	    return FIRST_VALUE <= SECOND_VALUE;
+	when OP_GT =>
+	    return FIRST_VALUE > SECOND_VALUE;
+	when OP_GE =>
+	    return FIRST_VALUE >= SECOND_VALUE;
+	when OP_PLUS =>
+	    return FIRST_VALUE + SECOND_VALUE;
+	when OP_MINUS =>
+	    return FIRST_VALUE - SECOND_VALUE;
+	when OP_MULT =>
+	    return FIRST_VALUE * SECOND_VALUE;
+	when OP_DIV =>
+	    return FIRST_VALUE / SECOND_VALUE;
+	when OP_MOD =>
+	    return FIRST_VALUE mod SECOND_VALUE;
+	when OP_REM =>
+	    return FIRST_VALUE rem SECOND_VALUE;
+	when OP_CAT =>
+	    return CONST_VOID;
+	when OP_EXP =>
+	    return FIRST_VALUE ** SECOND_VALUE;
+	end case;
+    end STATIC_OP_VALUE;
+
+
+    function RESOLVE_SLICE
+	    (NAME: TREE; DISCRETE_RANGE: TREE; TYPE_SPEC: TREE) return TREE
+    is
+	ARRAY_TYPE:	TREE := GET_BASE_STRUCT(TYPE_SPEC);
+	INDEX_TYPE:	TREE := CONST_VOID;
+	RESOLVED_RANGE: TREE := DISCRETE_RANGE;
+	RESOLVED_NAME:	TREE;
+    begin
+
+	-- check that name is array type
+	-- ... and get the index subtype
+	if KIND(ARRAY_TYPE) = DN_ACCESS then
+	    ARRAY_TYPE := GET_BASE_STRUCT(D(SM_DESIG_TYPE,ARRAY_TYPE));
+	end if;
+	if KIND(ARRAY_TYPE) /= DN_ARRAY then
+	    if ARRAY_TYPE /= CONST_VOID then
+                QUIT("Resolve_Slice: Array type expected");
+	    end if;
+	else
+	    INDEX_TYPE := GET_BASE_TYPE( D(SM_TYPE_SPEC, HEAD(LIST
+			( D(SM_INDEX_S, ARRAY_TYPE) ) )));
+	end if;
+
+	-- resolve the range if it is an explicit range
+	-- ... (otherwise it is already resolved)
+	if KIND(RESOLVED_RANGE) = DN_RANGE then
+	    RESOLVED_RANGE := RESOLVE_DISCRETE_RANGE(RESOLVED_RANGE,INDEX_TYPE);
+	end if;
+
+	-- resolve the name
+	if KIND(NAME) in CLASS_DESIGNATOR
+	or else KIND(NAME) = DN_SELECTED then
+	    declare
+		NAME_DEFSET: DEFSET_TYPE := FETCH_DEFSET(NAME);
+		NAME_DEFINTERP: DEFINTERP_TYPE;
+		NAME_STRUCT: TREE;
+		NEW_DEFSET: DEFSET_TYPE := EMPTY_DEFSET;
+	    begin
+	      if not IS_EMPTY(NAME_DEFSET)
+	      and ARRAY_TYPE /= CONST_VOID then
+		while not IS_EMPTY(NAME_DEFSET) loop
+		    POP(NAME_DEFSET, NAME_DEFINTERP);
+		    NAME_STRUCT := GET_BASE_STRUCT
+			    ( D(XD_SOURCE_NAME, GET_DEF(NAME_DEFINTERP)) );
+		    if KIND(NAME_STRUCT) = DN_ACCESS then
+			NAME_STRUCT := GET_BASE_STRUCT
+				( D(SM_DESIG_TYPE, NAME_STRUCT) );
+		    end if;
+		    if NAME_STRUCT = ARRAY_TYPE then
+			ADD_TO_DEFSET(NEW_DEFSET, NAME_DEFINTERP);
+		    end if;
+		end loop;
+		if IS_EMPTY(NEW_DEFSET) then
+                    ERROR(D(LX_SRCPOS,NAME), "**** no defs for slice name");
+		end if;
+		REQUIRE_UNIQUE_DEF(NAME, NEW_DEFSET);
+	      end if;
+	      RESOLVED_NAME := RESOLVE_EXP
+			( NAME
+			, GET_BASE_TYPE(GET_THE_ID(NEW_DEFSET)));
+	    end;
+	else
+	    declare
+		NAME_TYPESET: TYPESET_TYPE := FETCH_TYPESET(NAME);
+		NAME_TYPEINTERP: TYPEINTERP_TYPE;
+		NAME_STRUCT: TREE;
+		NEW_TYPESET: TYPESET_TYPE := EMPTY_TYPESET;
+	    begin
+	      if not IS_EMPTY(NAME_TYPESET)
+	      and ARRAY_TYPE /= CONST_VOID then
+		while not IS_EMPTY(NAME_TYPESET) loop
+		    POP(NAME_TYPESET, NAME_TYPEINTERP);
+		    NAME_STRUCT
+			    := GET_BASE_STRUCT(GET_TYPE(NAME_TYPEINTERP));
+		    if KIND(NAME_STRUCT) = DN_ACCESS then
+			NAME_STRUCT := GET_BASE_STRUCT
+				( D(SM_DESIG_TYPE, NAME_STRUCT) );
+		    end if;
+		    if NAME_STRUCT = ARRAY_TYPE
+		    then
+			ADD_TO_TYPESET(NEW_TYPESET, NAME_TYPEINTERP);
+		    end if;
+		end loop;
+		if IS_EMPTY(NEW_TYPESET) then
+                    ERROR(D(LX_SRCPOS,NAME), "**** no types for slice name");
+		end if;
+	      end if;
+	      RESOLVED_NAME := RESOLVE_EXP(NAME, NEW_TYPESET);
+	    end;
+
+	-- make slice
+
+	end if;
+	return MAKE_SLICE
+			( LX_SRCPOS => D(LX_SRCPOS, NAME)
+			, AS_NAME => RESOLVED_NAME
+			, AS_DISCRETE_RANGE => RESOLVED_RANGE
+			, SM_EXP_TYPE => TYPE_SPEC );
+
+    end RESOLVE_SLICE;
+
+
+    function RESOLVE_INDEXED(EXP: TREE) return TREE is
+	-- exp is a function_call node; make it indexed
+	-- as_name[exp] is already resolved
+
+	NAME:		constant TREE := D(AS_NAME, EXP);
+	GEN_ASSOC_S:	constant TREE := D(AS_GENERAL_ASSOC_S, EXP);
+
+	ARRAY_SUBTYPE:	constant TREE := D(SM_EXP_TYPE, NAME);
+	ARRAY_TYPE:	TREE := GET_BASE_STRUCT(ARRAY_SUBTYPE);
+	COMP_SUBTYPE:	TREE;
+    begin
+
+	-- check that name is array type
+	if KIND(ARRAY_TYPE) = DN_ACCESS then
+	    ARRAY_TYPE := GET_BASE_STRUCT(D(SM_DESIG_TYPE,ARRAY_TYPE));
+	end if;
+	if KIND(ARRAY_TYPE) /= DN_ARRAY then
+	    if ARRAY_TYPE = CONST_VOID then
+		RESOLVE_ERRONEOUS_PARAM_S(GEN_ASSOC_S);
+		D(SM_EXP_TYPE, EXP, CONST_VOID);
+		return EXP;
+	    else
+                QUIT("Resolve_Indexed: Array type expected");
+	    end if;
+	end if;
+
+	-- get the component subtype
+	COMP_SUBTYPE := D(SM_COMP_TYPE, ARRAY_TYPE);
+
+	-- resolve subscripts, make indexed node and return
+	return MAKE_INDEXED
+			( LX_SRCPOS => D(LX_SRCPOS, EXP)
+			, AS_NAME => NAME
+			, AS_EXP_S
+				=> RESOLVE_SUBSCRIPTS(ARRAY_TYPE,GEN_ASSOC_S)
+			, SM_EXP_TYPE => COMP_SUBTYPE );
+
+    end RESOLVE_INDEXED;
+
+
+    function RESOLVE_CONVERSION(EXP: TREE; SUBTYPE_ID: TREE) return TREE is
+	-- exp is a function_call node; make it conversion
+	-- as_name[exp] is already resolved
+
+	NAME:		constant TREE := D(AS_NAME, EXP);
+	GEN_ASSOC_S:	constant TREE := D(AS_GENERAL_ASSOC_S, EXP);
+	TARGET_STRUCT:	TREE := GET_BASE_STRUCT(SUBTYPE_ID);
+	TARGET_ANCESTOR:TREE;
+
+	PARAM_LIST:	SEQ_TYPE := LIST(GEN_ASSOC_S);
+	PARAM:		TREE;
+	PARAM_TYPESET:	TYPESET_TYPE;
+	PARAM_TYPEINTERP: TYPEINTERP_TYPE;
+	PARAM_STRUCT:	TREE;
+	NEW_TYPESET:	TYPESET_TYPE := EMPTY_TYPESET;
+    begin
+	POP(PARAM_LIST, PARAM);
+	if KIND(PARAM) = DN_ASSOC then
+            ERROR(D(LX_SRCPOS,PARAM), "Named conversion param");
+	    PARAM := D(AS_EXP, PARAM);
+	end if;
+	if not IS_EMPTY(PARAM_LIST) then
+	    ERROR(D(LX_SRCPOS,HEAD(PARAM_LIST))
+                        , "Conversion has more than 1 param");
+	end if;
+	EVAL_EXP_TYPES(PARAM, PARAM_TYPESET);
+
+	if not IS_EMPTY(PARAM_TYPESET)
+	and then TARGET_STRUCT /= CONST_VOID then
+	    case KIND(TARGET_STRUCT) is
+	    when DN_INTEGER .. DN_FIXED =>
+		while not IS_EMPTY(PARAM_TYPESET) loop
+		    POP(PARAM_TYPESET, PARAM_TYPEINTERP);
+		    PARAM_STRUCT := GET_BASE_STRUCT(GET_TYPE(PARAM_TYPEINTERP));
+		    if KIND(PARAM_STRUCT) in DN_INTEGER .. DN_FIXED
+		    or KIND(PARAM_STRUCT)
+			       in DN_UNIVERSAL_INTEGER .. DN_UNIVERSAL_REAL
+		    or KIND(PARAM_STRUCT) in DN_ANY_INTEGER .. DN_ANY_REAL
+		    then
+			ADD_TO_TYPESET
+				( NEW_TYPESET
+				, GET_BASE_TYPE(PARAM_STRUCT)
+				, GET_EXTRAINFO(PARAM_TYPEINTERP) );
+		    end if;
+		end loop;
+	    when DN_ARRAY =>
+		while not IS_EMPTY(PARAM_TYPESET) loop
+		    POP(PARAM_TYPESET, PARAM_TYPEINTERP);
+		    PARAM_STRUCT := GET_BASE_STRUCT(GET_TYPE(PARAM_TYPEINTERP));
+		    if KIND(PARAM_STRUCT) = DN_ARRAY
+		    and then GET_BASE_TYPE(D(SM_COMP_TYPE, TARGET_STRUCT))
+				= GET_BASE_TYPE(D(SM_COMP_TYPE, PARAM_STRUCT))
+		    then
+			declare
+			    TARGET_INDEX_LIST: SEQ_TYPE
+				    := LIST(D(SM_INDEX_S, TARGET_STRUCT));
+			    TARGET_INDEX: TREE;
+			    PARAM_INDEX_LIST: SEQ_TYPE
+				    := LIST(D(SM_INDEX_S, PARAM_STRUCT));
+			    PARAM_INDEX: TREE;
+			begin
+			    loop
+				if IS_EMPTY(TARGET_INDEX_LIST) then
+				    if IS_EMPTY(PARAM_INDEX_LIST) then
+					ADD_TO_TYPESET
+					    ( NEW_TYPESET
+					    , GET_BASE_TYPE(PARAM_STRUCT)
+					    , GET_EXTRAINFO(PARAM_TYPEINTERP) );
+				    end if;
+				    exit;
+				elsif IS_EMPTY(PARAM_INDEX_LIST) then
+				    exit;
+				end if;
+				POP(TARGET_INDEX_LIST, TARGET_INDEX);
+				POP(PARAM_INDEX_LIST, PARAM_INDEX);
+				TARGET_INDEX := GET_BASE_TYPE
+					( D(SM_TYPE_SPEC, TARGET_INDEX) );
+				PARAM_INDEX := GET_BASE_TYPE
+					( D(SM_TYPE_SPEC, PARAM_INDEX) );
+				if KIND(TARGET_INDEX) = DN_INTEGER
+				and then KIND(PARAM_INDEX) = DN_INTEGER then
+				    null;
+				elsif GET_ANCESTOR_TYPE(TARGET_INDEX)
+						= GET_ANCESTOR_TYPE(PARAM_INDEX)
+				then
+				    null;
+				else
+				    exit;
+				end if;
+			    end loop;
+			end;
+		    end if;
+		end loop;
+	    when others =>
+		TARGET_STRUCT := GET_ANCESTOR_TYPE(TARGET_STRUCT);
+		while not IS_EMPTY(PARAM_TYPESET) loop
+		    POP(PARAM_TYPESET, PARAM_TYPEINTERP);
+		    PARAM_STRUCT
+			    := GET_ANCESTOR_TYPE(GET_TYPE(PARAM_TYPEINTERP));
+		    if PARAM_STRUCT = TARGET_STRUCT then
+			ADD_TO_TYPESET
+				( NEW_TYPESET
+				, PARAM_TYPEINTERP );
+		    end if;
+		end loop;
+	    end case;
+
+	    if IS_EMPTY(NEW_TYPESET) then
+                ERROR(D(LX_SRCPOS, PARAM), "Invalid type for conversion");
+	    else
+		REQUIRE_UNIQUE_TYPE(PARAM, NEW_TYPESET);
+	    end if;
+	end if;
+
+	PARAM := RESOLVE_EXP(PARAM, NEW_TYPESET);
+	return MAKE_CONVERSION
+		( LX_SRCPOS => D(LX_SRCPOS, EXP)
+		, AS_NAME => NAME
+		, AS_EXP => PARAM
+		, SM_EXP_TYPE => D(SM_TYPE_SPEC, SUBTYPE_ID) );
+    end RESOLVE_CONVERSION;
+
+
+    procedure REDUCE_APPLY_NAMES
+		( NAME: 	TREE
+		; NAME_DEFSET:	in out DEFSET_TYPE
+		; GEN_ASSOC_S:	TREE
+		; INDEX:	TREE := CONST_VOID )
+    is
+	-- this version called from Walk_Stm for procedure or entry call
+	IS_SLICE: BOOLEAN;	-- never set, since name is proc or entry
+    begin
+	REDUCE_APPLY_NAMES
+		( NAME
+		, NAME_DEFSET
+		, GEN_ASSOC_S
+		, INDEX
+		, IS_SLICE );
+    end REDUCE_APPLY_NAMES;
+
+
+    procedure REDUCE_APPLY_NAMES
+		( NAME: 	TREE
+		; NAME_DEFSET:	in out DEFSET_TYPE
+		; GEN_ASSOC_S:	TREE
+		; INDEX:	TREE := CONST_VOID
+		; IS_SLICE_OUT: out BOOLEAN )
+    is
+	ASSOC_LIST:	SEQ_TYPE := LIST(GEN_ASSOC_S);
+	ACTUAL_COUNT:	NATURAL := LENGTH(ASSOC_LIST);
+
+	INDEX_TYPESET: TYPESET_TYPE := EMPTY_TYPESET;
+
+	ACTUAL: ACTUAL_ARRAY_TYPE (1 .. ACTUAL_COUNT);
+	POSITIONAL_LAST: NATURAL := 0;
+
+	NAMED_SEEN:		BOOLEAN := FALSE;
+	ERROR_SEEN:		BOOLEAN := FALSE;
+	IS_SLICE:		BOOLEAN := FALSE;
+
+	DEFINTERP:		DEFINTERP_TYPE;
+	NEW_DEFSET:		DEFSET_TYPE := EMPTY_DEFSET;
+	HEADER: 		TREE;
+	NAME_DEF:		TREE;
+	NAME_ID:		TREE;
+
+	ACTUALS_OK:		BOOLEAN;
+	RESULT_STRUCT:		TREE;
+
+	EXTRAINFO:		EXTRAINFO_TYPE;
+    begin
+	if INDEX /= CONST_VOID then
+	    EVAL_EXP_TYPES(INDEX, INDEX_TYPESET);
+	end if;
+
+        for I in ACTUAL'RANGE loop
+	    POP(ASSOC_LIST, ACTUAL(I).EXP);
+	    if KIND(ACTUAL(I).EXP) = DN_ASSOC then
+		NAMED_SEEN := TRUE;
+		ACTUAL(I).SYM := D(LX_SYMREP, D(AS_USED_NAME, ACTUAL(I).EXP));
+		ACTUAL(I).EXP := D(AS_EXP, ACTUAL(I).EXP);
+	    else
+		if NAMED_SEEN then
+		    ERROR(D(LX_SRCPOS, ACTUAL(I).EXP),
+                                "Positional parameter follows named");
+		    ERROR_SEEN := TRUE;
+		end if;
+		ACTUAL(I).SYM := CONST_VOID;
+		POSITIONAL_LAST := I;
+	    end if;
+	end loop;
+
+        if ACTUAL'LAST = 1
+	and then INDEX = CONST_VOID
+	and then not NAMED_SEEN then
+	    EVAL_EXP_SUBTYPE_TYPES
+			( ACTUAL(1).EXP
+			, ACTUAL(1).TYPESET
+			, IS_SLICE );
+	    if IS_SLICE
+	    and then KIND(ACTUAL(1).EXP) /= DN_RANGE then
+		-- (resolve now -- used to indicate slice later)
+		REQUIRE_UNIQUE_TYPE(ACTUAL(1).EXP, ACTUAL(1).TYPESET);
+		ACTUAL(1).EXP := RESOLVE_DISCRETE_RANGE
+			( ACTUAL(1).EXP
+			, GET_THE_TYPE(ACTUAL(1).TYPESET) );
+		LIST(GEN_ASSOC_S, SINGLETON(ACTUAL(1).EXP));
+	    end if;
+	else
+            for I in ACTUAL'RANGE loop
+		EVAL_EXP_TYPES( ACTUAL(I).EXP, ACTUAL(I).TYPESET );
+		-- note. following used to resolve conv to univ fixed
+		STASH_TYPESET(ACTUAL(I).EXP, ACTUAL(I).TYPESET);
+	    end loop;
+	end if;
+	IS_SLICE_OUT := IS_SLICE;
+
+	if IS_EMPTY(NAME_DEFSET) then
+	    ERROR_SEEN := TRUE;
+	end if;
+
+	if not ERROR_SEEN then
+	    while not IS_EMPTY (NAME_DEFSET) loop
+		POP(NAME_DEFSET, DEFINTERP);
+
+		ACTUALS_OK := FALSE;
+		NAME_DEF := GET_DEF(DEFINTERP);
+		NAME_ID := D(XD_SOURCE_NAME, NAME_DEF);
+		-- $$$$ what about generic
+		case KIND(NAME_ID) is
+		when DN_ENTRY_ID =>
+		    HEADER := D(SM_SPEC, NAME_ID);
+		    if IS_SLICE then
+			null;
+		    elsif HEADER = CONST_VOID then
+			-- (error in the declaration)
+			null;
+		    elsif INDEX /= CONST_VOID then
+			if D(AS_DISCRETE_RANGE, HEADER) /= CONST_VOID then
+			    CHECK_ACTUAL_TYPE
+					( GET_TYPE_OF_DISCRETE_RANGE
+						( D(AS_DISCRETE_RANGE, HEADER) )
+					, INDEX_TYPESET
+					, ACTUALS_OK
+					, EXTRAINFO );
+			    if ACTUALS_OK then
+				ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+				CHECK_ACTUAL_LIST
+					( HEADER
+					, ACTUAL
+					, ACTUALS_OK
+					, EXTRAINFO );
+				if ACTUALS_OK then
+				    ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+				end if;
+			    end if;
+			end if;
+		    elsif D(AS_DISCRETE_RANGE, HEADER) /= CONST_VOID then
+                        if ACTUAL'LAST = 1
+			and then ACTUAL(1).SYM = CONST_VOID then
+			    CHECK_ACTUAL_TYPE
+					( GET_TYPE_OF_DISCRETE_RANGE
+						( D(AS_DISCRETE_RANGE, HEADER) )
+					, ACTUAL(1).TYPESET
+					, ACTUALS_OK
+					, EXTRAINFO );
+			    if ACTUALS_OK then
+				ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+				CHECK_ACTUAL_LIST
+					( HEADER
+					, ACTUAL(1..0) -- (null range)
+					, ACTUALS_OK
+					, EXTRAINFO );
+				if ACTUALS_OK then
+				    ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+				end if;
+			    end if;
+			else
+			    ACTUALS_OK := FALSE;
+			end if;
+		    else
+			CHECK_ACTUAL_LIST
+				( HEADER
+				, ACTUAL
+				, ACTUALS_OK
+				, EXTRAINFO );
+			if ACTUALS_OK then
+			    ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+			end if;
+		    end if;
+		    if ACTUALS_OK then
+			ADD_TO_DEFSET(NEW_DEFSET, DEFINTERP);
+		    end if;
+		when DN_PROCEDURE_ID | DN_OPERATOR_ID
+				| DN_BLTN_OPERATOR_ID =>
+		    --$$$$ worry about conversions with boolean-valued ops
+		    HEADER := D(XD_HEADER, GET_DEF(DEFINTERP));
+		    CHECK_ACTUAL_LIST
+			    ( HEADER
+			    , ACTUAL
+			    , ACTUALS_OK
+			    , EXTRAINFO );
+		    if ACTUALS_OK and not IS_SLICE then
+			ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+			ADD_TO_DEFSET(NEW_DEFSET, DEFINTERP);
+		    end if;
+		when DN_FUNCTION_ID | DN_GENERIC_ID =>
+		    HEADER := D(XD_HEADER, GET_DEF(DEFINTERP));
+		    CHECK_ACTUAL_LIST
+			    ( HEADER
+			    , ACTUAL
+			    , ACTUALS_OK
+			    , EXTRAINFO );
+		    if ACTUALS_OK and not IS_SLICE then
+			ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+			ADD_TO_DEFSET(NEW_DEFSET, DEFINTERP);
+		    end if;
+		    if not NAMED_SEEN
+		    and then KIND(HEADER) = DN_FUNCTION_SPEC -- ie, not gen proc
+		    then
+			RESULT_STRUCT := GET_BASE_STRUCT(D(AS_NAME, HEADER));
+			if KIND(RESULT_STRUCT) = DN_ACCESS then
+			    RESULT_STRUCT
+				    := GET_BASE_STRUCT
+					    ( D(SM_DESIG_TYPE, RESULT_STRUCT) );
+			end if;
+			if KIND(RESULT_STRUCT) = DN_ARRAY
+			and then LENGTH(LIST(D(SM_INDEX_S, RESULT_STRUCT)))
+                                        = ACTUAL'LENGTH
+			then
+			    CHECK_ACTUAL_LIST
+				    ( HEADER
+				    , ACTUAL(1..0) -- (null range)
+				    , ACTUALS_OK
+				    , EXTRAINFO );
+			    if ACTUALS_OK then
+				CHECK_SUBSCRIPT_LIST
+				    ( RESULT_STRUCT
+				    , ACTUAL
+				    , ACTUALS_OK
+				    , EXTRAINFO );
+			    end if;
+			    if ACTUALS_OK then
+				ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+				ADD_TO_DEFSET
+					( NEW_DEFSET
+					, GET_DEF(DEFINTERP)
+					, GET_EXTRAINFO(DEFINTERP)
+					, IS_NULLARY => TRUE );
+			    end if;
+			end if;
+		    end if;
+		when CLASS_OBJECT_NAME =>
+		    RESULT_STRUCT := GET_BASE_STRUCT(D(SM_OBJ_TYPE, NAME_ID));
+		    if KIND(RESULT_STRUCT) = DN_ACCESS then
+			RESULT_STRUCT
+				:= GET_BASE_STRUCT
+					( D(SM_DESIG_TYPE, RESULT_STRUCT) );
+		    end if;
+		    if not NAMED_SEEN
+		    and then KIND(RESULT_STRUCT) = DN_ARRAY
+		    and then LENGTH(LIST(D(SM_INDEX_S, RESULT_STRUCT)))
+                                    = ACTUAL'LENGTH
+		    then
+			CHECK_SUBSCRIPT_LIST
+				    ( RESULT_STRUCT
+				    , ACTUAL
+				    , ACTUALS_OK
+				    , EXTRAINFO );
+			if ACTUALS_OK then
+			    ADD_EXTRAINFO(DEFINTERP, EXTRAINFO);
+			    ADD_TO_DEFSET(NEW_DEFSET, DEFINTERP);
+			end if;
+		    end if;
+		when others =>
+                    ERROR(D(LX_SRCPOS, NAME), "Name not valid in apply");
+		end case;
+	    end loop;
+
+	    if IS_EMPTY(NEW_DEFSET) then
+                ERROR(D(LX_SRCPOS, NAME), "Parameter type mismatch");
+	    end if;
+	end if;
+
+	NAME_DEFSET := NEW_DEFSET;
+    end REDUCE_APPLY_NAMES;
+
+
+    procedure CHECK_ACTUAL_LIST
+			( HEADER:	TREE
+			; ACTUAL:	ACTUAL_ARRAY_TYPE
+			; ACTUALS_OK:	out BOOLEAN
+			; EXTRAINFO:	out EXTRAINFO_TYPE )
+    is
+	ACTUALS_ACCEPTED: NATURAL := 0;
+	NAMED_FIRST:	NATURAL;
+
+	PARAM_CURSOR:	PARAM_CURSOR_TYPE;
+	PARAM_SYM:	TREE;
+	NEW_ACTUALS_OK: BOOLEAN;
+	NEW_EXTRAINFO:	EXTRAINFO_TYPE := NULL_EXTRAINFO;
+	SUB_EXTRAINFO:	EXTRAINFO_TYPE;
+	ACTUAL_SEEN:	BOOLEAN;
+    begin
+	INIT_PARAM_CURSOR(PARAM_CURSOR, LIST(D(AS_PARAM_S, HEADER)));
+
+	-- process positional parameters
+        for I in ACTUAL'RANGE loop
+	    exit
+		when ACTUAL(I).SYM /= CONST_VOID;
+
+	    ADVANCE_PARAM_CURSOR(PARAM_CURSOR);
+	    if PARAM_CURSOR.ID = CONST_VOID then
+		ACTUALS_OK := FALSE;
+		EXTRAINFO := NULL_EXTRAINFO;
+		return;
+	    end if;
+
+	    CHECK_ACTUAL_TYPE
+			( GET_BASE_TYPE(D(SM_OBJ_TYPE, PARAM_CURSOR.ID))
+			, ACTUAL(I).TYPESET
+			, NEW_ACTUALS_OK
+			, SUB_EXTRAINFO );
+	    if not NEW_ACTUALS_OK then
+		ACTUALS_OK := FALSE;
+		EXTRAINFO := NULL_EXTRAINFO;
+		return;
+	    end if;
+
+	    ADD_EXTRAINFO(NEW_EXTRAINFO, SUB_EXTRAINFO);
+	    if DEBUG then
+                PUT("Positional accepted - ");PUT(" ");
+                PUT(BOOLEAN'IMAGE(NEW_EXTRAINFO = NULL_EXTRAINFO));
+                PUT_LINE(BOOLEAN'IMAGE(SUB_EXTRAINFO = NULL_EXTRAINFO));
+	    end if;
+	    ACTUALS_ACCEPTED := I;
+	end loop;
+
+	--process default and named parameters
+	NAMED_FIRST := ACTUALS_ACCEPTED + 1;
+	loop
+	    ADVANCE_PARAM_CURSOR(PARAM_CURSOR);
+	    exit
+		when PARAM_CURSOR.ID = CONST_VOID;
+
+	    PARAM_SYM := D(LX_SYMREP, PARAM_CURSOR.ID);
+	    ACTUAL_SEEN := FALSE;
+            for I in NAMED_FIRST .. ACTUAL'LAST loop
+		if PARAM_SYM = ACTUAL(I).SYM then
+		    CHECK_ACTUAL_TYPE
+				( GET_BASE_TYPE
+					( D(SM_OBJ_TYPE, PARAM_CURSOR.ID) )
+				, ACTUAL(I).TYPESET
+				, NEW_ACTUALS_OK
+				, SUB_EXTRAINFO );
+		    if NEW_ACTUALS_OK then
+			ACTUAL_SEEN := TRUE;
+			ADD_EXTRAINFO(NEW_EXTRAINFO, SUB_EXTRAINFO);
+			ACTUALS_ACCEPTED := ACTUALS_ACCEPTED + 1;
+			exit;
+		    else
+			ACTUALS_OK := FALSE;
+			EXTRAINFO := NULL_EXTRAINFO;
+			return;
+		    end if;
+		end if;
+	    end loop;
+	    if not ACTUAL_SEEN
+	    and then D(SM_INIT_EXP, PARAM_CURSOR.ID) = CONST_VOID then
+		ACTUALS_OK := FALSE;
+		EXTRAINFO := NULL_EXTRAINFO;
+		return;
+
+	    end if;
+	end loop;
+        if ACTUALS_ACCEPTED = ACTUAL'LENGTH then
+	    ACTUALS_OK := TRUE;
+	    EXTRAINFO := NEW_EXTRAINFO;
+	else
+	    ACTUALS_OK := FALSE;
+	    EXTRAINFO := NULL_EXTRAINFO;
+	end if;
+    end CHECK_ACTUAL_LIST;
+
+
+    procedure REDUCE_ARRAY_PREFIX_TYPES
+		( NAME: 	TREE
+		; NAME_TYPESET: in out TYPESET_TYPE
+		; GEN_ASSOC_S:	TREE
+		; IS_SLICE_OUT: out BOOLEAN )
+    is
+	ASSOC_LIST:	SEQ_TYPE := LIST(GEN_ASSOC_S);
+	ACTUAL_COUNT:	NATURAL := LENGTH(ASSOC_LIST);
+
+	ACTUAL: ACTUAL_ARRAY_TYPE (1 .. ACTUAL_COUNT);
+	ACTUALS_OK: BOOLEAN;
+
+	TYPEINTERP:		TYPEINTERP_TYPE;
+	NAME_STRUCT:		TREE;
+	NEW_TYPESET:		TYPESET_TYPE := EMPTY_TYPESET;
+
+	EXTRAINFO:		EXTRAINFO_TYPE;
+	IS_SLICE:		BOOLEAN := FALSE;
+    begin
+        for I in ACTUAL'RANGE loop
+	    POP(ASSOC_LIST, ACTUAL(I).EXP);
+	    if KIND(ACTUAL(I).EXP) = DN_ASSOC then
+                ERROR(D(LX_SRCPOS,ACTUAL(I).EXP), "Named for subscript");
+		ACTUAL(I).EXP := D(AS_EXP, ACTUAL(I).EXP);
+	    end if;
+	    ACTUAL(I).SYM := CONST_VOID;
+	end loop;
+
+        if ACTUAL'LAST = 1 then
+	    EVAL_EXP_SUBTYPE_TYPES
+			( ACTUAL(1).EXP
+			, ACTUAL(1).TYPESET
+			, IS_SLICE );
+	    if IS_SLICE
+	    and then KIND(ACTUAL(1).EXP) /= DN_RANGE then
+		-- (resolve now -- used to indicate slice later)
+		REQUIRE_UNIQUE_TYPE(ACTUAL(1).EXP, ACTUAL(1).TYPESET);
+		ACTUAL(1).EXP := RESOLVE_DISCRETE_RANGE
+			( ACTUAL(1).EXP
+			, GET_THE_TYPE(ACTUAL(1).TYPESET) );
+	    end if;
+	    LIST(GEN_ASSOC_S, SINGLETON(ACTUAL(1).EXP));
+	else
+            for I in ACTUAL'RANGE loop
+		EVAL_EXP_TYPES( ACTUAL(I).EXP, ACTUAL(I).TYPESET );
+	    end loop;
+	end if;
+	IS_SLICE_OUT := IS_SLICE;
+
+	if IS_EMPTY(NAME_TYPESET) then
+	    return;
+	end if;
+
+	while not IS_EMPTY (NAME_TYPESET) loop
+	    POP(NAME_TYPESET, TYPEINTERP);
+
+	    ACTUALS_OK := FALSE;
+	    NAME_STRUCT := GET_BASE_STRUCT(GET_TYPE(TYPEINTERP));
+	    if KIND(NAME_STRUCT) = DN_ACCESS then
+		NAME_STRUCT
+			    := GET_BASE_STRUCT
+				    ( D(SM_DESIG_TYPE, NAME_STRUCT) );
+	    end if;
+	    if KIND(NAME_STRUCT) = DN_ARRAY
+	    and then LENGTH(LIST(D(SM_INDEX_S, NAME_STRUCT)))
+                                = ACTUAL'LENGTH
+	    then
+		CHECK_SUBSCRIPT_LIST
+			     ( NAME_STRUCT
+				, ACTUAL
+				, ACTUALS_OK
+				, EXTRAINFO );
+		if ACTUALS_OK then
+		    ADD_EXTRAINFO(TYPEINTERP, EXTRAINFO);
+		    ADD_TO_TYPESET(NEW_TYPESET, TYPEINTERP);
+		end if;
+	    end if;
+	end loop;
+
+	if IS_EMPTY(NEW_TYPESET) then
+            ERROR(D(LX_SRCPOS, NAME), "Subscript type mismatch");
+	end if;
+
+	NAME_TYPESET := NEW_TYPESET;
+    end REDUCE_ARRAY_PREFIX_TYPES;
+
+
+    procedure CHECK_SUBSCRIPT_LIST
+			( ARRAY_TYPE:	TREE
+			; ACTUAL:	ACTUAL_ARRAY_TYPE
+			; ACTUALS_OK:	out BOOLEAN
+			; EXTRAINFO:	out EXTRAINFO_TYPE )
+    is
+	INDEX_LIST:	SEQ_TYPE := LIST(D(SM_INDEX_S, ARRAY_TYPE));
+	INDEX:		TREE;
+	NEW_EXTRAINFO:	EXTRAINFO_TYPE := NULL_EXTRAINFO;
+	NEW_ACTUALS_OK: BOOLEAN := TRUE;
+	SUB_EXTRAINFO:	EXTRAINFO_TYPE;
+    begin
+        for I in ACTUAL'RANGE loop
+	    if IS_EMPTY(INDEX_LIST) then
+		ACTUALS_OK := FALSE;
+		EXTRAINFO := NULL_EXTRAINFO;
+		return;
+	    end if;
+
+	    POP(INDEX_LIST, INDEX);
+	    CHECK_ACTUAL_TYPE
+			( GET_BASE_TYPE (D(SM_TYPE_SPEC,INDEX))
+			, ACTUAL(I).TYPESET
+			, NEW_ACTUALS_OK
+			, SUB_EXTRAINFO );
+	    if NEW_ACTUALS_OK then
+		ADD_EXTRAINFO(NEW_EXTRAINFO, SUB_EXTRAINFO);
+	    else
+		ACTUALS_OK := FALSE;
+		EXTRAINFO := NULL_EXTRAINFO;
+		return;
+	    end if;
+	end loop;
+
+
+	if not IS_EMPTY(INDEX_LIST) then
+	    ACTUALS_OK := FALSE;
+	    EXTRAINFO := NULL_EXTRAINFO;
+	    return;
+	end if;
+
+	ACTUALS_OK := TRUE;
+	EXTRAINFO := NEW_EXTRAINFO;
+    end CHECK_SUBSCRIPT_LIST;
+
+
+    procedure CHECK_ACTUAL_TYPE
+			( FORMAL_TYPE:	 TREE
+			; ACTUAL_TYPESET: TYPESET_TYPE
+			; ACTUALS_OK:	out BOOLEAN
+			; EXTRAINFO:	out EXTRAINFO_TYPE )
+    is
+	TYPESET:	TYPESET_TYPE := ACTUAL_TYPESET;
+	TYPEINTERP:	TYPEINTERP_TYPE;
+	TYPE_SPEC:	TREE;
+
+	FORMAL_STRUCT:	TREE;
+    begin
+	ACTUALS_OK := TRUE;
+	EXTRAINFO := NULL_EXTRAINFO;
+
+	if DEBUG then
+            PUT("Check_Actual_Type - ");
+	    PUT_LINE(NODE_REP(FORMAL_TYPE));
+	end if;
+	while not IS_EMPTY(TYPESET) loop
+	    POP(TYPESET, TYPEINTERP);
+
+	    TYPE_SPEC:= GET_TYPE(TYPEINTERP);
+
+	    if DEBUG then
+                PUT("... "); PUT(BOOLEAN'IMAGE(GET_EXTRAINFO(TYPEINTERP)
+				= NULL_EXTRAINFO));
+                PUT(" "); PUT_LINE(NODE_REP(TYPE_SPEC));
+	    end if;
+	    if TYPE_SPEC = FORMAL_TYPE then
+		EXTRAINFO := GET_EXTRAINFO(TYPEINTERP);
+		if DEBUG then
+                    PUT("... -- MATCH");
+		end if;
+		return;
+
+	    elsif KIND(TYPE_SPEC) in CLASS_UNSPECIFIED_TYPE then
+		FORMAL_STRUCT := GET_BASE_STRUCT(FORMAL_TYPE);
+                case CLASS_UNSPECIFIED_TYPE'(KIND(TYPE_SPEC)) is
+		when DN_ANY_ACCESS =>
+		    if KIND(FORMAL_STRUCT) = DN_ACCESS then
+			return;
+		    end if;
+		when DN_ANY_COMPOSITE =>
+		    if IS_NONLIMITED_COMPOSITE_TYPE(FORMAL_TYPE) then
+			return;
+		    end if;
+		when DN_ANY_STRING =>
+		    if IS_STRING_TYPE(FORMAL_TYPE) then
+			return;
+		    end if;
+		when DN_ANY_ACCESS_OF =>
+		    if KIND(FORMAL_STRUCT) = DN_ACCESS then
+			if GET_BASE_TYPE(D(SM_DESIG_TYPE, FORMAL_STRUCT))
+				    = D(XD_ITEM,TYPE_SPEC)
+			then
+			    return;
+			end if;
+		    end if;
+		when DN_ANY_INTEGER =>
+		    if IS_INTEGER_TYPE(FORMAL_TYPE) then
+			return;
+		    end if;
+		when DN_ANY_REAL =>
+		    if IS_REAL_TYPE(FORMAL_TYPE) then
+			return;
+		    end if;
+		end case;
+
+	    elsif KIND(FORMAL_TYPE) = DN_UNIVERSAL_FIXED then
+		if KIND(GET_BASE_STRUCT(TYPE_SPEC)) = DN_FIXED then
+		    EXTRAINFO := GET_EXTRAINFO(TYPEINTERP);
+		    return;
+		end if;
+	    end if;
+	end loop;
+
+	if DEBUG then
+           PUT_LINE("... -- FAIL");
+	end if;
+	ACTUALS_OK := FALSE;
+    end CHECK_ACTUAL_TYPE;
+
+
+    function RESOLVE_SUBP_PARAMETERS
+		( DEF:		TREE
+		; GEN_ASSOC_S:	TREE )
+	    return TREE
+    is
+	-- resolves all parameter expressions
+	-- and returns the normalized parameter list
+
+	type ACTUAL_TYPE is
+	    record
+		SYM:	  TREE;
+		ASSOC:	    TREE;
+	    end record;
+
+	ACTUAL_LIST: SEQ_TYPE := LIST(GEN_ASSOC_S);
+	ACTUAL_TAIL: SEQ_TYPE := ACTUAL_LIST;
+
+	ACTUAL: array ( 1 .. LENGTH(ACTUAL_LIST) ) of ACTUAL_TYPE;
+	POSITIONAL_LAST: NATURAL := 0;
+
+	DEF_HEADER: TREE := D(XD_HEADER, DEF);
+	PARAM_S: TREE;
+
+	PARAM_CURSOR: PARAM_CURSOR_TYPE;
+
+	EXP: TREE;
+	ACTUAL_SUB: NATURAL;
+	NEW_ASSOC_LIST: SEQ_TYPE := MAKE;
+	NEW_NORM_LIST: SEQ_TYPE := MAKE;
+
+    begin
+
+	-- get the sequence of parameters
+	if KIND(DEF_HEADER) in CLASS_SUBP_ENTRY_HEADER then
+	    PARAM_S := D(AS_PARAM_S, D(XD_HEADER, DEF));
+	else
+	    PARAM_S := D(AS_PARAM_S, D(SM_SPEC, D(XD_SOURCE_NAME,DEF)));
+	end if;
+
+	-- unpack the actuals
+        for I in ACTUAL'RANGE loop
+	    POP(ACTUAL_LIST, ACTUAL(I).ASSOC);
+	    if KIND(ACTUAL(I).ASSOC) = DN_ASSOC then
+		ACTUAL(I).SYM := D(LX_SYMREP, D(AS_USED_NAME, ACTUAL(I).ASSOC));
+	    else
+		ACTUAL(I).SYM := CONST_VOID;
+		POSITIONAL_LAST := I;
+		ACTUAL_TAIL := ACTUAL_LIST;
+	    end if;
+	end loop;
+
+	-- for each positional formal
+	INIT_PARAM_CURSOR
+		( PARAM_CURSOR
+		, LIST(PARAM_S) );
+	for I in 1 .. POSITIONAL_LAST loop
+	    ADVANCE_PARAM_CURSOR(PARAM_CURSOR);
+
+	    -- resolve the associated actual
+	    EXP := RESOLVE_EXP_OR_UNIV_FIXED
+			(ACTUAL(I).ASSOC, D(SM_OBJ_TYPE,PARAM_CURSOR.ID));
+
+	    -- add to new parameter list and normalized list
+	    NEW_ASSOC_LIST := APPEND(NEW_ASSOC_LIST, EXP);
+	    NEW_NORM_LIST := APPEND(NEW_NORM_LIST, EXP);
+	end loop;
+
+	-- add named parameters to end of parameter list
+	if not IS_EMPTY(ACTUAL_TAIL) then
+	    NEW_ASSOC_LIST := APPEND(NEW_ASSOC_LIST, ACTUAL_TAIL.H);
+	end if;
+
+	-- for each named formal
+	loop
+	    ADVANCE_PARAM_CURSOR(PARAM_CURSOR);
+	    exit
+		when PARAM_CURSOR.ID = CONST_VOID;
+
+	    -- search for matching parameter
+	    ACTUAL_SUB := POSITIONAL_LAST + 1;
+            while ACTUAL_SUB <= ACTUAL'LAST loop
+		if D(LX_SYMREP, PARAM_CURSOR.ID) = ACTUAL(ACTUAL_SUB).SYM then
+		    exit;
+		end if;
+		ACTUAL_SUB := ACTUAL_SUB + 1;
+	    end loop;
+
+	    -- if there was one
+            if ACTUAL_SUB <= ACTUAL'LAST then
+
+		-- resolve the actual expression
+		EXP := RESOLVE_EXP_OR_UNIV_FIXED
+			( D(AS_EXP, ACTUAL(ACTUAL_SUB).ASSOC )
+			, D(SM_OBJ_TYPE,PARAM_CURSOR.ID) );
+
+		-- put resolved expression in the association
+		D(AS_EXP, ACTUAL(ACTUAL_SUB).ASSOC, EXP);
+
+		-- name in assoc is used name id; clear sm_defn
+		D(SM_DEFN
+			, D(AS_USED_NAME, ACTUAL(ACTUAL_SUB).ASSOC)
+			, CONST_VOID );
+
+	    -- else -- since no actual given
+	    else
+
+		-- use the default expression
+		EXP := D(SM_INIT_EXP, PARAM_CURSOR.ID);
+	    end if;
+
+	    -- add resolved expression to normalized list
+	    NEW_NORM_LIST := APPEND(NEW_NORM_LIST, EXP);
+	end loop;
+
+	-- save the modified general_assoc_s
+	LIST(GEN_ASSOC_S, NEW_ASSOC_LIST);
+
+	-- return the normalized list
+	return MAKE_EXP_S(LIST => NEW_NORM_LIST);
+    end RESOLVE_SUBP_PARAMETERS;
+
+
+    function RESOLVE_EXP_OR_UNIV_FIXED(EXP: TREE; TYPE_SPEC: TREE) return TREE
+    is
+	TYPESET: TYPESET_TYPE;
+	TYPEINTERP: TYPEINTERP_TYPE;
+	NEW_TYPESET: TYPESET_TYPE;
+    begin
+	if KIND(TYPE_SPEC) /= DN_UNIVERSAL_FIXED then
+            if KIND(EXP) = DN_AGGREGATE then
+	        return RESOLVE_EXP_OR_AGGREGATE
+                        ( EXP
+                        , TYPE_SPEC
+                        , NAMED_OTHERS_OK
+                                => (KIND(TYPE_SPEC) = DN_CONSTRAINED_ARRAY) );
+            else
+	        return RESOLVE_EXP(EXP, GET_BASE_TYPE(TYPE_SPEC));
+            end if;
+	end if;
+
+	TYPESET := FETCH_TYPESET(EXP);
+	NEW_TYPESET := EMPTY_TYPESET;
+	while not IS_EMPTY(TYPESET) loop
+	    POP(TYPESET,TYPEINTERP);
+	    if KIND(GET_TYPE(TYPEINTERP)) = DN_FIXED then
+		ADD_TO_TYPESET(NEW_TYPESET, TYPEINTERP);
+	    end if;
+	end loop;
+	if IS_EMPTY(NEW_TYPESET) then
+            ERROR(D(LX_SRCPOS,EXP), "**** No types in resolve univ fix");
+	end if;
+	REQUIRE_UNIQUE_TYPE(EXP, NEW_TYPESET);
+	return RESOLVE_EXP(EXP, NEW_TYPESET);
+    end RESOLVE_EXP_OR_UNIV_FIXED;
+
+
+    function RESOLVE_SUBSCRIPTS
+		( ARRAY_TYPE:		TREE
+		; GENERAL_ASSOC_S:	TREE)
+	     return TREE
+    is
+	ASSOC_LIST: SEQ_TYPE := LIST(GENERAL_ASSOC_S);
+	NEW_ASSOC_LIST: SEQ_TYPE := MAKE;
+	EXP: TREE;
+
+	INDEX_LIST: SEQ_TYPE;
+	INDEX: TREE;
+
+    begin
+	if KIND(ARRAY_TYPE) = DN_ACCESS then
+	    INDEX_LIST := LIST(D(SM_INDEX_S, D(SM_DESIG_TYPE,ARRAY_TYPE)));
+	else
+	    INDEX_LIST := LIST(D(SM_INDEX_S, ARRAY_TYPE));
+	end if;
+
+	while not IS_EMPTY(ASSOC_LIST) loop
+	    POP(ASSOC_LIST, EXP);
+	    POP(INDEX_LIST, INDEX);
+	    EXP := RESOLVE_EXP(EXP, GET_BASE_TYPE(D(SM_TYPE_SPEC,INDEX)));
+	    NEW_ASSOC_LIST := APPEND(NEW_ASSOC_LIST, EXP);
+	end loop;
+
+	return MAKE_EXP_S
+		( LX_SRCPOS => D(LX_SRCPOS, GENERAL_ASSOC_S)
+		, LIST => NEW_ASSOC_LIST );
+    end RESOLVE_SUBSCRIPTS;
+
+    procedure RESOLVE_ERRONEOUS_PARAM_S (GENERAL_ASSOC_S: TREE) is
+	-- parameter list caused no functions to be selected
+	-- resolve all parameters with invalid type
+
+	PARAM_LIST: SEQ_TYPE := LIST(GENERAL_ASSOC_S);
+	PARAM: TREE;
+    begin
+
+	-- for each parameter in the param_s
+	while not IS_EMPTY(PARAM_LIST) loop
+	    POP(PARAM_LIST, PARAM);
+
+	    -- if it is a named association
+	    if KIND(PARAM) = DN_ASSOC then
+
+		-- discard the name
+		PARAM := D(AS_EXP, PARAM);
+	    end if;
+
+	    -- resolve parameter and ignore the result
+	    PARAM := RESOLVE_EXP(PARAM, CONST_VOID);
+	end loop;
+    end RESOLVE_ERRONEOUS_PARAM_S;
+
+
+    function GET_ARRAY_COMPONENT_TYPE(TYPE_SPEC: TREE) return TREE is
+	BASE_STRUCT: TREE := GET_BASE_STRUCT(TYPE_SPEC);
+    begin
+	if KIND(BASE_STRUCT) = DN_ACCESS then
+	    BASE_STRUCT := GET_BASE_STRUCT(D(SM_DESIG_TYPE,BASE_STRUCT));
+	end if;
+	return GET_BASE_TYPE(D(SM_COMP_TYPE, BASE_STRUCT));
+    end GET_ARRAY_COMPONENT_TYPE;
+
+    function GET_TYPE_OF_DISCRETE_RANGE(DISCRETE_RANGE: TREE) return TREE is
+    begin
+	case KIND(DISCRETE_RANGE) is
+	when DN_DISCRETE_SUBTYPE =>
+	    return GET_TYPE_OF_DISCRETE_RANGE
+			(D(AS_SUBTYPE_INDICATION, DISCRETE_RANGE));
+	when DN_SUBTYPE_INDICATION =>
+	    return GET_TYPE_OF_DISCRETE_RANGE(D(AS_NAME,DISCRETE_RANGE));
+	when DN_RANGE | DN_RANGE_ATTRIBUTE =>
+	    return GET_BASE_TYPE(D(SM_TYPE_SPEC,DISCRETE_RANGE));
+	when CLASS_DESIGNATOR | DN_SELECTED =>
+	    return GET_BASE_TYPE(DISCRETE_RANGE);
+	when others =>
+            QUIT("Get_Type_Of_Discrete_Range: invalid parameter");
+	end case;
+    end GET_TYPE_OF_DISCRETE_RANGE;
+
+end REDSUBP;

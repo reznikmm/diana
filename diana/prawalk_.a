@@ -1,0 +1,8 @@
+with USERPK, SEMGLOB; use USERPK, SEMGLOB;
+
+package PRAWALK is
+    procedure WALK_PRAGMA
+		( USED_NAME_ID: TREE
+		; GEN_ASSOC_S:	TREE
+		; H:		H_TYPE );
+end PRAWALK;

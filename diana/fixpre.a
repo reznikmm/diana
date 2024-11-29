@@ -1,0 +1,821 @@
+with TEXT_IO; use TEXT_IO;
+with USERPK; use USERPK;
+with DIANA, DIANAMAN, DIANATTR; use DIANA, DIANAMAN, DIANATTR;
+with MAKENOD; use MAKENOD;
+with UARITH;
+with PRINTNOD; use PRINTNOD; -- for debug
+with PRENAME;
+
+procedure FIXPRE is
+    -- Program to fixup attributes in predefined environment
+    -- Run after predefined environment has been run through parse phase
+
+    procedure MAIN;
+    procedure ABORT_RUN(MSG: STRING);
+    procedure DEFINE_ID (ID: TREE);
+    function LOOKUP_ID (USED_ID_OR_SYMREP: TREE) return TREE;
+    function GET_BASE_TYPE(TYPE_SPEC: TREE) return TREE;
+    function TYPE_SPEC_FOR_SUBTYPE(SUBTYPE_INDICATION: TREE) return TREE;
+    procedure WALK(NODE, PARENT, REGION: TREE);
+    procedure MAKE_PREDEF_IDS(ID_LIST: out SEQ_TYPE);
+
+    -- here from visutil to avoid additional withs
+    function COPY_NODE(NODE: TREE) return TREE is
+      RESULT: TREE;
+      LENGTH: NATURAL;
+    begin
+      if NODE.TLN = 0 then
+	return NODE;
+      else
+	LENGTH := NATURAL(DABS(0,NODE).TLN);
+	RESULT := MAKE(INTEGER(NODE.TTY), LENGTH);
+	for I in 1 .. LENGTH loop
+	  DABS(I, RESULT, DABS(I, NODE));
+	end loop;
+	return RESULT;
+      end if;
+    end COPY_NODE;
+
+    ----------------------------------------------------------------
+
+    procedure MAIN is
+	USER_ROOT: TREE;
+	PREDEF_ID_LIST: SEQ_TYPE;
+    begin
+
+	OPEN_DIANA;
+	USER_ROOT := D(XD_USER_ROOT, CONST_ROOT);
+
+	-- make standard nodes for predefined names
+	MAKE_PREDEF_IDS(PREDEF_ID_LIST);
+
+	-- walk the syntax tree, beginning at the compilation node
+	WALK( D(XD_STRUCTURE, USER_ROOT)
+	    , PARENT => CONST_VOID
+	    , REGION => CONST_VOID);
+
+	-- fix up sizes of subtypes
+	-- and make DURATION point to anonymous base type
+	declare
+            INTEGER_ID: TREE := LOOKUP_ID(STORESYM("INTEGER"));
+            NATURAL_ID: TREE := LOOKUP_ID(STORESYM("NATURAL"));
+            POSITIVE_ID: TREE := LOOKUP_ID(STORESYM("POSITIVE"));
+            --PRIORITY_ID: TREE := LOOKUP_ID(STORESYM("PRIORITY"));
+	    INTGR_SIZE: INTEGER := DI(CD_IMPL_SIZE, D(SM_TYPE_SPEC,INTEGER_ID));
+
+            DURATION_ID: TREE := LOOKUP_ID(STORESYM("DURATION"));
+            DURATION_BASE_ID: TREE := LOOKUP_ID(STORESYM("_DURATION"));
+	    DURATION_SPEC: TREE := D(SM_TYPE_SPEC, DURATION_ID);
+	    DURATION_BASE_SPEC: TREE := D(SM_TYPE_SPEC, DURATION_BASE_ID);
+	begin
+	    DI(CD_IMPL_SIZE, D(SM_TYPE_SPEC,NATURAL_ID), INTGR_SIZE);
+	    DI(CD_IMPL_SIZE, D(SM_TYPE_SPEC,POSITIVE_ID), INTGR_SIZE);
+	    --DI(CD_IMPL_SIZE, D(SM_TYPE_SPEC,PRIORITY_ID), INTGR_SIZE);
+
+	    DI(CD_IMPL_SIZE, DURATION_BASE_SPEC
+		    , DI(CD_IMPL_SIZE, DURATION_SPEC));
+	    D(SM_BASE_TYPE, DURATION_SPEC, DURATION_BASE_SPEC);
+	    DB(SM_IS_ANONYMOUS, DURATION_BASE_SPEC, TRUE);
+	    D(XD_SOURCE_NAME, DURATION_BASE_SPEC, DURATION_ID);
+
+	    -- fix up subtype of range constraint for subtype duration
+	    D(SM_TYPE_SPEC
+		    , D(SM_RANGE, DURATION_SPEC)
+		    , DURATION_BASE_SPEC );
+	end;
+
+	-- fix up _ADDRESS, a derived type
+	-- (done here after ancestor type completely defined)
+	declare
+            ADDRESS_ID: TREE := LOOKUP_ID(STORESYM("_ADDRESS"));
+	    -- ancestor type id saved in sm_type_spec
+	    BASE_SPEC: TREE := D(SM_TYPE_SPEC
+		    , D(SM_TYPE_SPEC, ADDRESS_ID) );
+	    NEW_SPEC: TREE := COPY_NODE(BASE_SPEC);
+	begin
+	    D(XD_SOURCE_NAME, NEW_SPEC, ADDRESS_ID);
+	    D(SM_DERIVED, NEW_SPEC, BASE_SPEC);
+	    D(SM_BASE_TYPE, NEW_SPEC, NEW_SPEC);
+	    D(SM_TYPE_SPEC, ADDRESS_ID, NEW_SPEC);
+	end;
+
+        -- save the predefined id's in private part of _STANDRD
+        LIST(D(AS_DECL_S2, D(SM_spec, LOOKUP_ID(STORESYM("_STANDRD"))))
+		, PREDEF_ID_LIST);
+	CLOSE_DIANA;
+    end MAIN;
+
+    procedure ABORT_RUN(MSG: STRING) is
+    begin
+	SET_OUTPUT(STANDARD_OUTPUT);
+        PUT("**** ");
+	PUT_LINE(MSG);
+	raise ASSERTION_ERROR;
+    end ABORT_RUN;
+
+
+    procedure DEFINE_ID (ID: TREE) is
+	-- save definition of symbol
+	-- all symbols in _STANDRD are unique, so only one on deflist
+    begin
+	-- print id for debug
+	if KIND(ID) not in CLASS_ENUM_LITERAL
+	and then KIND(ID) /= DN_CONSTANT_ID then
+	    PUT_LINE(PRINTNAME(D(LX_SYMREP,ID)));
+	end if;
+
+	LIST(D(LX_SYMREP,ID), SINGLETON(ID));
+    end DEFINE_ID;
+
+
+    function LOOKUP_ID (USED_ID_OR_SYMREP: TREE) return TREE is
+	SYMREP: TREE := USED_ID_OR_SYMREP;
+	DEFLIST: SEQ_TYPE;
+    begin
+	if KIND(USED_ID_OR_SYMREP) /= DN_SYMBOL_REP then
+	    SYMREP := D(LX_SYMREP, USED_ID_OR_SYMREP);
+	end if;
+	DEFLIST := LIST(SYMREP);
+
+	if IS_EMPTY(DEFLIST) then
+            PUT("Symbol not defined -- ");
+	    PUT_LINE(PRINTNAME(SYMREP));
+	    return CONST_VOID;
+	else
+	    return HEAD(DEFLIST);
+	end if;
+    end LOOKUP_ID;
+
+
+    function GET_BASE_TYPE(TYPE_SPEC: TREE) return TREE is
+	-- get type_spec for base type of a subtype
+	-- function, since, e.g., universal_integer has no sm_base_type
+    begin
+	if KIND(TYPE_SPEC) in CLASS_NON_TASK then
+	    return D(SM_BASE_TYPE, TYPE_SPEC);
+	else
+	    return TYPE_SPEC;
+	end if;
+    end GET_BASE_TYPE;
+
+
+    function TYPE_SPEC_FOR_SUBTYPE(SUBTYPE_INDICATION: TREE) return TREE is
+	CONSTRAINT: TREE;
+	NAME: TREE;
+	BASE_TYPE: TREE;
+    begin
+	if KIND(SUBTYPE_INDICATION) = DN_SUBTYPE_INDICATION then
+	    CONSTRAINT := D(AS_CONSTRAINT, SUBTYPE_INDICATION);
+	    NAME := D(AS_NAME, SUBTYPE_INDICATION);
+	else
+	    CONSTRAINT := CONST_VOID;
+	    NAME := SUBTYPE_INDICATION;
+	end if;
+
+	BASE_TYPE := D(SM_TYPE_SPEC, D(SM_DEFN,NAME));
+	if CONSTRAINT = CONST_VOID then
+	    return BASE_TYPE;
+	elsif KIND(BASE_TYPE) = DN_INTEGER then
+	    D(SM_TYPE_SPEC, CONSTRAINT, BASE_TYPE);
+	    D(SM_EXP_TYPE, D(AS_EXP1,CONSTRAINT), BASE_TYPE);
+	    D(SM_EXP_TYPE, D(AS_EXP2,CONSTRAINT), BASE_TYPE);
+	    return MAKE_INTEGER
+		( SM_RANGE => CONSTRAINT
+		, SM_BASE_TYPE => BASE_TYPE
+		, XD_SOURCE_NAME => D(XD_SOURCE_NAME, BASE_TYPE) );
+	else
+            ABORT_RUN("Bad type for subtype_indication");
+	end if;
+    end TYPE_SPEC_FOR_SUBTYPE;
+
+
+    procedure WALK(NODE, PARENT, REGION: TREE) is
+	-- Walk the syntax tree created by parser
+	-- and fill in attributes it did not set
+    begin
+        --PUT("WALK ");PRINT_TREE(NODE);NEW_LINE;
+
+	case KIND(NODE) is
+
+	when DN_VOID =>
+	    null;
+
+
+	when DN_CONSTANT_ID =>
+	    declare
+	    begin
+		DEFINE_ID(NODE);
+		D(XD_REGION, NODE, REGION);
+	    end;
+
+
+	when DN_ENUMERATION_ID | DN_CHARACTER_ID =>
+	    declare
+	    begin
+		DEFINE_ID(NODE);
+		D(XD_REGION, NODE, REGION);
+	    end;
+
+
+	when DN_TYPE_ID =>
+	    declare
+	    begin
+		DEFINE_ID(NODE);
+		D(SM_FIRST, NODE, NODE);
+		D(XD_REGION, NODE, REGION);
+	    end;
+
+
+	when DN_SUBTYPE_ID =>
+	    declare
+	    begin
+		DEFINE_ID(NODE);
+		D(XD_REGION, NODE, REGION);
+	    end;
+
+
+	when DN_PACKAGE_ID =>
+	    declare
+	    begin
+		DEFINE_ID(NODE);
+		D(SM_FIRST, NODE, NODE);
+		D(SM_SPEC, NODE, D(AS_HEADER,PARENT));
+		D(SM_UNIT_DESC, NODE, CONST_VOID);
+		D(XD_REGION, NODE, REGION);
+	    end;
+
+
+	when DN_EXCEPTION_ID =>
+	    declare
+	    begin
+		DEFINE_ID(NODE);
+		D(SM_RENAMES_EXC, NODE, CONST_VOID);
+		D(XD_REGION, NODE, REGION);
+	    end;
+
+
+	when DN_CONSTANT_DECL =>
+	    declare
+		SOURCE_NAME_S: constant TREE := D(AS_SOURCE_NAME_S, NODE);
+		EXP: constant TREE := D(AS_EXP, NODE);
+		TYPE_DEF: constant TREE := D(AS_TYPE_DEF, NODE);
+	    begin
+		WALK(SOURCE_NAME_S, NODE, REGION);
+		WALK(EXP, NODE, REGION);
+		WALK(TYPE_DEF, NODE, REGION);
+
+		D(SM_OBJ_TYPE, HEAD(LIST(D(AS_SOURCE_NAME_S, NODE)))
+			, TYPE_SPEC_FOR_SUBTYPE(D(AS_TYPE_DEF, NODE)) );
+		D(SM_INIT_EXP, HEAD(LIST(D(AS_SOURCE_NAME_S, NODE)))
+			, D(AS_EXP, NODE) );
+	    end;
+
+
+	when DN_EXCEPTION_DECL =>
+	    declare
+		SOURCE_NAME_S: constant TREE := D(AS_SOURCE_NAME_S, NODE);
+	    begin
+		WALK(SOURCE_NAME_S, NODE, REGION);
+	    end;
+
+
+	when DN_TYPE_DECL =>
+	    declare
+		SOURCE_NAME: constant TREE := D(AS_SOURCE_NAME, NODE);
+		DSCRMT_DECL_S: constant TREE := D(AS_DSCRMT_DECL_S, NODE);
+		TYPE_DEF: constant TREE := D(AS_TYPE_DEF, NODE);
+	    begin
+		WALK(SOURCE_NAME, NODE, REGION);
+		WALK(DSCRMT_DECL_S, NODE, REGION);
+		WALK(TYPE_DEF, NODE, REGION);
+
+		-- save ancestor type name for derived type (_ADDRESS)
+		if KIND(TYPE_DEF) = DN_DERIVED_DEF then
+		    D(SM_TYPE_SPEC, SOURCE_NAME
+			    , D(SM_DEFN
+				, D(AS_NAME
+				    , D(AS_SUBTYPE_INDICATION,TYPE_DEF) )));
+		end if;
+	    end;
+
+
+	when DN_SUBTYPE_DECL =>
+	    declare
+		SOURCE_NAME: constant TREE := D(AS_SOURCE_NAME, NODE);
+		SUBTYPE_INDICATION: constant TREE
+				    := D(AS_SUBTYPE_INDICATION, NODE);
+		SUBTYPE_NODE: TREE;
+	    begin
+		WALK(SOURCE_NAME, NODE, REGION);
+		WALK(SUBTYPE_INDICATION, NODE, REGION);
+
+		SUBTYPE_NODE := TYPE_SPEC_FOR_SUBTYPE(SUBTYPE_INDICATION);
+		D(SM_TYPE_SPEC, D(AS_SOURCE_NAME, NODE), SUBTYPE_NODE);
+
+		if D(AS_CONSTRAINT, SUBTYPE_INDICATION) /= CONST_VOID then
+		    D(XD_SOURCE_NAME, SUBTYPE_NODE, D(AS_SOURCE_NAME,NODE));
+		end if;
+	    end;
+
+
+	when DN_PACKAGE_DECL =>
+	    declare
+		SOURCE_NAME: constant TREE := D(AS_SOURCE_NAME, NODE);
+		HEADER: constant TREE := D(AS_HEADER, NODE);
+		UNIT_KIND: constant TREE := D(AS_UNIT_KIND, NODE);
+	    begin
+		WALK(SOURCE_NAME, NODE, REGION);
+		WALK(HEADER, NODE, REGION => SOURCE_NAME);
+		WALK(UNIT_KIND, NODE, REGION => SOURCE_NAME);
+	    end;
+
+
+	when DN_LENGTH_ENUM_REP =>
+	    declare
+		NAME: constant TREE := D(AS_NAME, NODE);
+		EXP: constant TREE := D(AS_EXP, NODE);
+	    begin
+		--only walk prefix of attribute, not attribute name
+		WALK(D(AS_NAME,NAME), NODE, REGION);
+		WALK(EXP, NODE, REGION);
+
+		-- In source to indicate cd_impl_size for a type
+                -- Form is: for NNN'SIZE use 999;
+		D(CD_IMPL_SIZE
+			, D(SM_TYPE_SPEC, D(SM_DEFN, D(AS_NAME,NAME)))
+			, D(SM_VALUE, EXP) );
+	    end;
+
+
+	when DN_PRAGMA =>
+	    declare
+		USED_NAME_ID: constant TREE := D(AS_USED_NAME_ID, NODE);
+		GENERAL_ASSOC_S: constant TREE := D(AS_GENERAL_ASSOC_S, NODE);
+	    begin
+		WALK(USED_NAME_ID, NODE, REGION);
+		WALK(GENERAL_ASSOC_S, NODE, REGION);
+
+		-- In source to indicate pragma Packed (String)
+		DB(SM_IS_PACKED
+			, D(SM_TYPE_SPEC
+				, D(SM_DEFN, HEAD(LIST(GENERAL_ASSOC_S))))
+			, TRUE );
+	    end;
+
+
+	when DN_ENUMERATION_DEF =>
+	    declare
+		ENUM_LITERAL_S: constant TREE := D(AS_ENUM_LITERAL_S, NODE);
+
+		RANGE_NODE: TREE := MAKE(DN_RANGE);
+
+		ENUMERATION: TREE := MAKE_ENUMERATION
+			( SM_LITERAL_S => ENUM_LITERAL_S
+			, SM_RANGE => RANGE_NODE
+			, CD_IMPL_SIZE => 8
+			, XD_SOURCE_NAME => D(AS_SOURCE_NAME, PARENT) );
+
+		ENUM_LITERAL_LIST: SEQ_TYPE := LIST(ENUM_LITERAL_S);
+		ENUM_LITERAL_FIRST: TREE := HEAD(ENUM_LITERAL_LIST);
+		ENUM_LITERAL: TREE;
+		ENUM_POS: INTEGER := -1;
+	    begin
+                D(LX_SRCPOS, RANGE_NODE, CONST_VOID);
+
+		D(SM_TYPE_SPEC, D(AS_SOURCE_NAME,PARENT), ENUMERATION);
+		D(SM_BASE_TYPE, ENUMERATION, ENUMERATION);
+
+		while not IS_EMPTY(ENUM_LITERAL_LIST) loop
+		    POP(ENUM_LITERAL_LIST, ENUM_LITERAL);
+		    WALK(ENUM_LITERAL, ENUM_LITERAL_S, REGION);
+		    D(SM_OBJ_TYPE, ENUM_LITERAL, ENUMERATION);
+		    ENUM_POS := ENUM_POS + 1;
+		    DI(SM_POS, ENUM_LITERAL, ENUM_POS);
+		    DI(SM_REP, ENUM_LITERAL, ENUM_POS);
+		end loop;
+
+		D(AS_EXP1, RANGE_NODE, MAKE_USED_OBJECT_ID
+			    ( LX_SYMREP => D(LX_SYMREP, ENUM_LITERAL_FIRST)
+			    , SM_EXP_TYPE => ENUMERATION
+			    , SM_VALUE => UARITH.U_VAL(0)
+			    , SM_DEFN => ENUM_LITERAL_FIRST ) );
+		D(AS_EXP2, RANGE_NODE, MAKE_USED_OBJECT_ID
+			    ( LX_SYMREP => D(LX_SYMREP, ENUM_LITERAL)
+			    , SM_EXP_TYPE => ENUMERATION
+			    , SM_VALUE => UARITH.U_VAL(ENUM_POS)
+			    , SM_DEFN => ENUM_LITERAL ) );
+		D(SM_TYPE_SPEC, RANGE_NODE, ENUMERATION);
+	    end;
+
+
+	when DN_SUBTYPE_INDICATION =>
+	    declare
+		CONSTRAINT: constant TREE := D(AS_CONSTRAINT, NODE);
+		NAME: constant TREE := D(AS_NAME, NODE);
+	    begin
+		WALK(CONSTRAINT, NODE, REGION);
+		WALK(NAME, NODE, REGION);
+		D(AS_NAME, NODE, MAKE_USED_NAME_ID
+			( SM_DEFN => D(SM_DEFN, NAME)
+			, LX_SYMREP => D(LX_SYMREP, NAME)
+			, LX_SRCPOS => D(LX_SRCPOS, NAME) ));
+	    end;
+
+
+	when DN_INTEGER_DEF =>
+	    declare
+		use UARITH;
+
+		CONSTRAINT: constant TREE := D(AS_CONSTRAINT, NODE);
+		INTEGER_NODE: TREE := MAKE_INTEGER
+			( SM_RANGE => CONSTRAINT
+			, XD_SOURCE_NAME => D(AS_SOURCE_NAME, PARENT) );
+	    begin
+		WALK(CONSTRAINT, NODE, REGION);
+		D(SM_TYPE_SPEC, CONSTRAINT, INTEGER_NODE);
+
+		D(SM_TYPE_SPEC, D(AS_SOURCE_NAME, PARENT), INTEGER_NODE);
+		D(SM_BASE_TYPE, INTEGER_NODE, INTEGER_NODE);
+	    end;
+
+
+	when DN_FLOAT_DEF =>
+	    declare
+		use UARITH;
+
+		CONSTRAINT: constant TREE := D(AS_CONSTRAINT, NODE);
+		RANGE_NODE: TREE := D(AS_RANGE, CONSTRAINT);
+		FLOAT_NODE: TREE := MAKE_FLOAT
+			( SM_RANGE => RANGE_NODE
+			, XD_SOURCE_NAME => D(AS_SOURCE_NAME, PARENT) );
+	    begin
+		WALK(CONSTRAINT, NODE, REGION);
+		D(SM_TYPE_SPEC, CONSTRAINT, FLOAT_NODE);
+
+		D(SM_TYPE_SPEC, RANGE_NODE, FLOAT_NODE);
+
+		D(SM_ACCURACY, FLOAT_NODE, D(SM_VALUE, D(AS_EXP, CONSTRAINT)));
+
+		D(SM_TYPE_SPEC, D(AS_SOURCE_NAME, PARENT), FLOAT_NODE);
+		D(SM_BASE_TYPE, FLOAT_NODE, FLOAT_NODE);
+	    end;
+
+
+	when DN_FIXED_DEF =>
+	    declare
+		use UARITH;
+
+		CONSTRAINT: constant TREE := D(AS_CONSTRAINT, NODE);
+		RANGE_NODE: TREE := D(AS_RANGE, CONSTRAINT);
+		FIXED_NODE: TREE := MAKE_FIXED
+			( SM_RANGE => RANGE_NODE
+			, XD_SOURCE_NAME => D(AS_SOURCE_NAME, PARENT) );
+	    begin
+		WALK(CONSTRAINT, NODE, REGION);
+		D(SM_TYPE_SPEC, CONSTRAINT, FIXED_NODE);
+
+		D(SM_TYPE_SPEC, RANGE_NODE, FIXED_NODE);
+
+		D(SM_ACCURACY, FIXED_NODE, D(SM_VALUE, D(AS_EXP, CONSTRAINT)));
+
+		D(SM_TYPE_SPEC, D(AS_SOURCE_NAME, PARENT), FIXED_NODE);
+		D(SM_BASE_TYPE, FIXED_NODE, FIXED_NODE);
+
+		D(CD_IMPL_SMALL, FIXED_NODE, D(SM_ACCURACY, FIXED_NODE));
+	    end;
+
+
+	when DN_UNCONSTRAINED_ARRAY_DEF =>
+	    declare
+		SUBTYPE_INDICATION: constant TREE
+				    := D(AS_SUBTYPE_INDICATION, NODE);
+		INDEX_S: constant TREE := D(AS_INDEX_S, NODE);
+
+		ARRAY_NODE: TREE := MAKE_ARRAY
+			(SM_INDEX_S => INDEX_S
+			, SM_SIZE => CONST_VOID
+			, XD_SOURCE_NAME => D(AS_SOURCE_NAME, PARENT) );
+	    begin
+		WALK(SUBTYPE_INDICATION, NODE, REGION);
+		WALK(INDEX_S, NODE, REGION);
+
+		D(SM_COMP_TYPE, ARRAY_NODE
+			, TYPE_SPEC_FOR_SUBTYPE(SUBTYPE_INDICATION) );
+
+		D(SM_TYPE_SPEC, D(AS_SOURCE_NAME, PARENT), ARRAY_NODE);
+		D(SM_BASE_TYPE, ARRAY_NODE, ARRAY_NODE);
+	    end;
+
+
+	when DN_USED_CHAR =>
+	    declare
+		DEFN: TREE := LOOKUP_ID(NODE);
+	    begin
+		D(SM_DEFN, NODE, DEFN);
+		D(SM_EXP_TYPE, NODE, D(SM_OBJ_TYPE,DEFN));
+		D(SM_VALUE, NODE, UARITH.U_VAL(DI(SM_POS,DEFN)));
+	    end;
+
+
+	when DN_USED_OBJECT_ID =>
+	    declare
+		DEFN: TREE := LOOKUP_ID(NODE);
+	    begin
+		D(SM_DEFN, NODE, DEFN);
+		if KIND(DEFN) = DN_ENUMERATION_ID then
+		    D(SM_EXP_TYPE, NODE, D(SM_OBJ_TYPE,DEFN));
+		    D(SM_VALUE, NODE, UARITH.U_VAL(DI(SM_POS,DEFN)));
+		end if;
+	    end;
+
+
+	when DN_FUNCTION_CALL =>
+	    declare
+		use UARITH;
+		use PRENAME;
+
+		NAME: constant TREE := D(AS_NAME, NODE);
+		GENERAL_ASSOC_S: constant TREE := D(AS_GENERAL_ASSOC_S, NODE);
+		PARAM: TREE := HEAD(LIST(GENERAL_ASSOC_S));
+		PARAM2: TREE := CONST_VOID;
+		BLTN_OPERATOR_ID: TREE
+			:= HEAD(LIST(D(LX_SYMREP,NAME)));
+	    begin
+
+                -- Only for unary "-", "*", "**" in ranges
+
+		WALK(GENERAL_ASSOC_S, NODE, REGION);
+
+		if not IS_EMPTY(TAIL(LIST(GENERAL_ASSOC_S))) then
+		    PARAM2 := HEAD(TAIL(LIST(GENERAL_ASSOC_S)));
+		end if;
+
+		if (PARAM2 = CONST_VOID)
+                        xor ( OP_CLASS'VAL(DI(SM_OPERATOR, BLTN_OPERATOR_ID))
+			      in CLASS_UNARY_OP )
+		then
+		    BLTN_OPERATOR_ID
+			    := HEAD(TAIL(LIST(D(LX_SYMREP,NAME))));
+		end if;
+
+		D(AS_NAME, NODE, MAKE_USED_OP
+			    ( SM_DEFN => BLTN_OPERATOR_ID
+			    , LX_SYMREP => D(LX_SYMREP, NAME)
+			    , LX_SRCPOS => D(LX_SRCPOS, NAME) ));
+
+                if PRINTNAME(D(LX_SYMREP,NAME)) = """-""" then
+		    if PARAM2 = CONST_VOID then
+			D(SM_VALUE, NODE, - D(SM_VALUE, PARAM));
+		    else
+			D(SM_VALUE, NODE
+				    , D(SM_VALUE, PARAM) - D(SM_VALUE,PARAM2));
+		    end if;
+                elsif PRINTNAME(D(LX_SYMREP,NAME)) = """*""" then
+		    D(SM_VALUE, NODE, D(SM_VALUE, PARAM) * D(SM_VALUE, PARAM2));
+                elsif PRINTNAME(D(LX_SYMREP,NAME)) = """**""" then
+		    D(SM_VALUE, NODE
+				, D(SM_VALUE, PARAM) ** D(SM_VALUE, PARAM2));
+		else
+                    ABORT_RUN("Function not allowed - "
+			      & PRINTNAME(D(LX_SYMREP,NAME)));
+		end if;
+
+		D(SM_EXP_TYPE, NODE, GET_BASE_TYPE(D(SM_EXP_TYPE, PARAM)));
+		D(SM_NORMALIZED_PARAM_S, NODE
+		       , MAKE_EXP_S( LIST => LIST(GENERAL_ASSOC_S)
+			       , LX_SRCPOS => D(LX_SRCPOS, GENERAL_ASSOC_S) ));
+	    end;
+
+
+	when DN_NUMERIC_LITERAL =>
+	    declare
+		VALUE: TREE := UARITH.U_VALUE(PRINTNAME(D(LX_NUMREP,NODE)));
+	    begin
+		if KIND(VALUE) = DN_NUM_VAL then
+		    D(SM_EXP_TYPE, NODE, MAKE(DN_UNIVERSAL_INTEGER));
+		else
+		    D(SM_EXP_TYPE, NODE, MAKE(DN_UNIVERSAL_REAL));
+		end if;
+		D(SM_VALUE, NODE, VALUE);
+	    end;
+
+
+	when DN_RANGE =>
+	    declare
+		EXP1: constant TREE := D(AS_EXP1, NODE);
+		EXP2: constant TREE := D(AS_EXP2, NODE);
+	    begin
+		WALK(EXP1, NODE, REGION);
+		WALK(EXP2, NODE, REGION);
+		D(SM_TYPE_SPEC, NODE, GET_BASE_TYPE(D(SM_EXP_TYPE,EXP1)));
+	    end;
+
+
+	when DN_DISCRETE_SUBTYPE =>
+	    declare
+		SUBTYPE_INDICATION: constant TREE
+				    := D(AS_SUBTYPE_INDICATION, NODE);
+	    begin
+		WALK(SUBTYPE_INDICATION, NODE, REGION);
+	    end;
+
+
+	when DN_FLOAT_CONSTRAINT =>
+	    declare
+		EXP: constant TREE := D(AS_EXP, NODE);
+		RANGE_NODE: constant TREE := D(AS_RANGE, NODE);
+	    begin
+		WALK(EXP, NODE, REGION);
+		WALK(RANGE_NODE, NODE, REGION);
+	    end;
+
+
+	when DN_FIXED_CONSTRAINT =>
+	    declare
+		EXP: constant TREE := D(AS_EXP, NODE);
+		RANGE_NODE: constant TREE := D(AS_RANGE, NODE);
+	    begin
+		WALK(EXP, NODE, REGION);
+		WALK(RANGE_NODE, NODE, REGION);
+	    end;
+
+
+	when DN_PACKAGE_SPEC =>
+	    declare
+		DECL_S1: constant TREE := D(AS_DECL_S1, NODE);
+		DECL_S2: constant TREE := D(AS_DECL_S2, NODE);
+	    begin
+		WALK(DECL_S1, NODE, REGION);
+		WALK(DECL_S2, NODE, REGION);
+
+		-- clear private part (used only for rep specs)
+		LIST(D(AS_DECL_S2, NODE), MAKE);
+	    end;
+
+
+	when DN_COMPILATION =>
+	    declare
+		COMPLTN_UNIT_S: constant TREE := D(AS_COMPLTN_UNIT_S, NODE);
+	    begin
+		WALK(COMPLTN_UNIT_S, NODE, REGION);
+	    end;
+
+
+	when DN_COMPILATION_UNIT =>
+	    declare
+		CONTEXT_ELEM_S: constant TREE := D(AS_CONTEXT_ELEM_S, NODE);
+		ALL_DECL: constant TREE := D(AS_ALL_DECL, NODE);
+		PRAGMA_S: constant TREE := D(AS_PRAGMA_S, NODE);
+	    begin
+		WALK(CONTEXT_ELEM_S, NODE, REGION);
+		WALK(ALL_DECL, NODE, REGION);
+		WALK(PRAGMA_S, NODE, REGION);
+		DI(XD_TIMESTAMP, NODE, 1);
+		LIST(NODE, MAKE); -- list of withed units
+		-- DI(XD_NBR_PAGES, NODE, ?); -- filled in when writing library
+                D(XD_LIB_NAME, NODE, STORESYM("_STANDRD.DCL"));
+	    end;
+
+
+	when DN_INDEX =>
+	    declare
+		NAME: constant TREE := D(AS_NAME, NODE);
+	    begin
+		WALK(NAME, NODE, REGION);
+		D(SM_TYPE_SPEC, NODE, D(SM_TYPE_SPEC, (D(SM_DEFN,NAME))));
+
+		D(AS_NAME, NODE, MAKE_USED_NAME_ID
+			( LX_SRCPOS => D(LX_SRCPOS, NAME)
+			, LX_SYMREP => D(LX_SYMREP, NAME)
+			, SM_DEFN => D(SM_DEFN,NAME) ));
+	    end;
+
+
+	when others =>
+	    declare
+		ITEM_LIST: SEQ_TYPE;
+		ITEM_NODE: TREE;
+	    begin
+		case ARITY(NODE) is
+		when NULLARY =>
+		    null;
+		when UNARY =>
+		    WALK(SON1(NODE), NODE, REGION);
+		when BINARY =>
+		    WALK(SON1(NODE), NODE, REGION);
+		    WALK(SON2(NODE), NODE, REGION);
+		when TERNARY =>
+		    WALK(SON1(NODE), NODE, REGION);
+		    WALK(SON2(NODE), NODE, REGION);
+		    WALK(SON3(NODE), NODE, REGION);
+		when ARBITRARY =>
+		    ITEM_LIST := LIST(NODE);
+		    while not IS_EMPTY(ITEM_LIST) loop
+			POP(ITEM_LIST, ITEM_NODE);
+			WALK(ITEM_NODE, NODE, REGION);
+		    end loop;
+		end case;
+	    end;
+
+	end case;
+
+        --PUT("Ret  ");PRINT_TREE(NODE);NEW_LINE;
+    end WALK;
+
+
+    procedure MAKE_PREDEF_IDS(ID_LIST: out SEQ_TYPE) is
+	use PRENAME;
+
+	NEW_ID_LIST:	SEQ_TYPE := MAKE;
+	NEW_ID: 	TREE;
+	NEW_ARG_LIST:	SEQ_TYPE;
+	NEW_ARG:	TREE;
+
+	ITEM_PNAME:	PNAME;
+	ITEM_LENGTH:	NATURAL;
+    begin
+	for PRAGMA_NAME in DEFINED_PRAGMAS loop
+	    NEW_ARG_LIST := MAKE;
+	    if PRAGMA_NAME = LIST or PRAGMA_NAME = PRENAME.DEBUG then
+		for ARG_NAME in LIST_ARGUMENTS loop
+		    NEW_ARG := MAKE_ARGUMENT_ID
+			    ( LX_SYMREP => STORESYM
+                                    ( LIST_ARGUMENTS'IMAGE(ARG_NAME) )
+                            , XD_POS => LIST_ARGUMENTS'POS(ARG_NAME) );
+		    NEW_ARG_LIST := APPEND(NEW_ARG_LIST, NEW_ARG);
+		end loop;
+	    elsif PRAGMA_NAME = OPTIMIZE then
+		for ARG_NAME in OPTIMIZE_ARGUMENTS loop
+		    NEW_ARG := MAKE_ARGUMENT_ID
+			    ( LX_SYMREP => STORESYM
+                                    ( OPTIMIZE_ARGUMENTS'IMAGE(ARG_NAME) )
+                            , XD_POS => OPTIMIZE_ARGUMENTS'POS(ARG_NAME) );
+		    NEW_ARG_LIST := APPEND(NEW_ARG_LIST, NEW_ARG);
+		end loop;
+	    elsif PRAGMA_NAME = SUPPRESS then
+		for ARG_NAME in SUPPRESS_ARGUMENTS loop
+		    NEW_ARG := MAKE_ARGUMENT_ID
+			    ( LX_SYMREP => STORESYM
+                                    ( SUPPRESS_ARGUMENTS'IMAGE(ARG_NAME) )
+                            , XD_POS => SUPPRESS_ARGUMENTS'POS(ARG_NAME) );
+		    NEW_ARG_LIST := APPEND(NEW_ARG_LIST, NEW_ARG);
+		end loop;
+	    elsif PRAGMA_NAME = INTERFACE then
+		for ARG_NAME in INTERFACE_ARGUMENTS loop
+		    NEW_ARG := MAKE_ARGUMENT_ID
+			    ( LX_SYMREP => STORESYM
+                                    ( INTERFACE_ARGUMENTS'IMAGE(ARG_NAME) )
+                            , XD_POS => INTERFACE_ARGUMENTS'POS(ARG_NAME) );
+		    NEW_ARG_LIST := APPEND(NEW_ARG_LIST, NEW_ARG);
+		end loop;
+	    end if;
+	    NEW_ID := MAKE_PRAGMA_ID
+		    ( LX_SYMREP => STORESYM
+                                ( DEFINED_PRAGMAS'IMAGE(PRAGMA_NAME) )
+                    , XD_POS => DEFINED_PRAGMAS'POS(PRAGMA_NAME)
+		    , SM_ARGUMENT_ID_S => MAKE_ARGUMENT_ID_S
+				( LIST => NEW_ARG_LIST ) );
+	    NEW_ID_LIST := APPEND(NEW_ID_LIST, NEW_ID);
+	    LIST(D(LX_SYMREP,NEW_ID)
+			, INSERT(LIST(D(LX_SYMREP,NEW_ID)), NEW_ID) );
+	end loop;
+
+	for ATTRIBUTE_NAME in DEFINED_ATTRIBUTES loop
+            SET (ITEM_PNAME, TO => DEFINED_ATTRIBUTES'IMAGE(ATTRIBUTE_NAME));
+	    ITEM_LENGTH := LENGTH(ITEM_PNAME);
+            if TO_STRING(ITEM_PNAME)(ITEM_LENGTH - 1 .. ITEM_LENGTH) = "_X" then
+		ITEM_LENGTH := ITEM_LENGTH - 2;
+	    end if;
+	    NEW_ID := MAKE_ATTRIBUTE_ID
+		    ( LX_SYMREP => STORESYM
+				( TO_STRING(ITEM_PNAME)(1 .. ITEM_LENGTH) )
+                    , XD_POS => DEFINED_ATTRIBUTES'POS(ATTRIBUTE_NAME) );
+	    NEW_ID_LIST := APPEND(NEW_ID_LIST, NEW_ID);
+	    LIST(D(LX_SYMREP,NEW_ID)
+			, INSERT(LIST(D(LX_SYMREP,NEW_ID)), NEW_ID) );
+	end loop;
+
+	for OP_NAME in OP_CLASS loop
+	    SET(ITEM_PNAME, TO => BLTN_TEXT_ARRAY(OP_NAME));
+	    ITEM_LENGTH := 3;
+            WHILE TO_STRING(ITEM_PNAME)(ITEM_LENGTH) = '!' loop
+		ITEM_LENGTH := ITEM_LENGTH - 1;
+	    end loop;
+	    NEW_ID := MAKE_BLTN_OPERATOR_ID
+		    ( LX_SYMREP => STORESYM
+                                ( '"'
+				  & TO_STRING(ITEM_PNAME)(1 .. ITEM_LENGTH)
+                                  & '"' )
+                    , SM_OPERATOR => OP_CLASS'POS(OP_NAME) );
+	    NEW_ID_LIST := APPEND(NEW_ID_LIST, NEW_ID);
+	    LIST(D(LX_SYMREP,NEW_ID)
+			, INSERT(LIST(D(LX_SYMREP,NEW_ID)), NEW_ID) );
+	end loop;
+
+	ID_LIST := NEW_ID_LIST;
+    end MAKE_PREDEF_IDS;
+
+
+begin
+    MAIN;
+end FIXPRE;

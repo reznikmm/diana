@@ -1,0 +1,30 @@
+with USERPK; use USERPK;
+with SETUTIL; use SETUTIL;
+
+package EXPTYPE is
+
+    procedure EVAL_EXP_TYPES
+		( EXP:			    TREE
+		; TYPESET:		    out TYPESET_TYPE );
+
+    procedure EVAL_EXP_SUBTYPE_TYPES
+		( EXP:			    TREE
+		; TYPESET:		    out TYPESET_TYPE
+		; IS_SUBTYPE_OUT:	    out BOOLEAN);
+
+    function EVAL_TYPE_MARK(EXP: TREE) return TREE;
+    function EVAL_SUBTYPE_INDICATION(EXP: TREE) return TREE;
+
+    procedure EVAL_RANGE
+		( EXP:			    TREE
+		; TYPESET:		    out TYPESET_TYPE);
+
+    procedure EVAL_DISCRETE_RANGE
+		( EXP:			    TREE
+		; TYPESET:		    out TYPESET_TYPE);
+
+    procedure EVAL_NON_UNIVERSAL_DISCRETE_RANGE
+		( EXP:			    TREE
+		; TYPESET:		    out TYPESET_TYPE);
+
+end EXPTYPE;

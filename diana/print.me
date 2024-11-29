@@ -1,0 +1,378 @@
+This file contains a history of fixes and changed files for the Ada/Diana
+front end, beginning with version delivered at the end of Nov. 1988.
+(To put up revised version, compile changed *.a and relink semphase,
+unless the text below says something else.)
+
+12/3/88   redsubp.a	Crash in GET_FUNCTION_RESULT_SUBTYPE when
+			type mark in function declaration was a selected.
+
+	  front.doc	Updated documentation file
+
+12/08/88  defwalk.a	Elements in discrete_range_s for a constrained
+			array definition do not reflect results of overload
+			resolution.  (E.g., type mark appears as
+			used_object_id rather that discrete_subtype.)
+
+	  front 	Modified shell script to preserve temporary file
+			around writelib.  (Temporary file before writelib
+			should be used for further processing.)  Please
+			change to the new script.
+
+01/09/89  nodwalk.a	as_name attribute of deferred_constant node
+			is a used_name_id (not subtype_indication)
+
+01/11/89  unc__con.aa	Specs for predefined library units
+	  unc__dea.aa	UNCHECKED_CONVERSION and UNCHECKED_DEALLOCATION.
+			(Run front on them to make them available.)
+
+          fixwith.a     Was crashing when with'ed unit contained a derived
+			enumeration type.
+
+	  expreso.a	Was crashing when object of a qualified expression
+			was not compatible with the type mark in the
+			qualified expression (or was undefined).
+
+	  libphase.a	Forward reference to the full type spec
+			(xd_full_type_spec) was being lost for an incomplete
+                        type declaration in a with'ed unit.  (NOTE...
+			after compiling libphase.a, relink libphase.)
+
+01/12/89  fixwith.a     Was crashing when with'ed unit contained an
+			object declaration which contained a
+			constrained array definition.
+
+	  newsnam.a	Was crashing on instantiation when generic unit
+			contained a deferred constant declaration.
+
+01/13/89   --		System now set for a maximum of 1500 virtual pages
+			(of 512 bytes each.)  If you run out of space,
+                        you get message "*** ABORTING *** too many vpg".
+			Value can be changed: it is value of MAX_VPG in
+			pageman_.a.  (I have NOT changed it in distributed
+			version.)  It can be made as large as 32767.
+			(Table has 2 bytes per entry -- no problem if
+			size increased.)  You must then recompile
+			pageman_.a pageman.a dianaman.a libphase.a printnod.a
+			writelib.a.  You must then relink ALL executable
+                        files.  (You will get strange CONSTRAINT_ERROR's
+			if sizes are inconsistent.)
+
+01/14/89  libphase.a	Error in earlier fix; sometimes crashing when
+                        with'ed unit contained declaration of unit name
+			which was not the first declaration of that name.
+			(After compiling libphase.a, relink libphase.)
+
+	  expreso.a	Error in earlier fix; spurious message that
+			named associations not allowed with others
+			for aggregate qualified with constrained array
+			subtype.
+
+	  visutil.a	Crashed on attempt to use name as a selected
+			component during its own declaration.
+
+01/19/89  diana.idl	Two fixes in the grammar: (1) a block body with
+	  PARSE.TBL	an empty statement list and no exception part
+                        now has stm_s and alternative_s with empty as_list's
+			as its children.  (2) corrected semantics for list
+			of rep clauses in a task specification so that
+			parphase no longer dies with an internal check.
+			To install: rerun loadgrmr; mv \$\$\$.TMP PARSE.VM.
+			(Or, you could regenerate the parse tables from
+			diana.idl, if you are a masochist.)
+
+01/24/89  nodwalk.a	sm_obj_type in a constant_id for a deferred
+			constant made to point to the private node
+			rather than the full type spec.  (Problem which
+			occurred was that sm_obj_type was being substituted
+			for incorrectly when generating the package spec
+			for an instantiation of a generic package.)
+
+01/25/89  unitlod_.a	(New package) Package to permit loading units
+	  unitlod.a	previously compiled by front into the Diana
+			workspace.  See unitlod_.a for calls.  To make
+                        an empty Diana workspace, use 'CREATE_DIANA;'.
+
+01/25/89  fixwith.a     Was crashing when with'ed spec contained a
+			declaration of a derived record type.
+
+02/07/89  expreso.a	Corrected sm_accuracy attributes for subtypes
+                        with fixed_point_constraint's and
+                        floating_point_constraint's.
+
+02/22/89  defwalk.a	For generic discrete type, create empty list
+			of enumeration literals.  (Had void instead.)
+
+	  newsnam.a	Corrected error in generic substitution for
+                        discriminant id.  (Was giving "not yet visible".)
+
+	  parphase.a	Added message for input line too long.	(Maximum
+			line length for this prototype is 127 characters.)
+			(Relink parphase.)
+
+	  stmwalk.a	Was crashing on reference to iteration variable
+			where range in declaration was in error; now
+			gives warning that declaration was in error.
+
+	  aggreso.a	sm_normalized_comp_s now filled in for array
+			aggregate.  Note: for a named + others, gaps
+			in the sequence are not filled in.  (sm_exp_type
+			and sm_discrete range are still not filled in
+			correctly for aggregates and string literals;
+			see front.doc)
+
+	  nodwalk.a	representation clauses are now handled.  The front
+	  repclau_.a	end now accepts the implementation-dependent ACVC
+	  repclau.a	tests (A*.DEP, C*.DEP) except where inapplicable
+			because of line length or types not in this
+			implementation.  (repclau is a new package)
+
+	  libphase.a	It is now possible to specify were the Ada library
+	  writelib.a	files (*.DCL, *.BDY, *.SUB) go.  To do so, insert
+                        a line "P <prefix>" as the first line of
+			ADA__LIB.CTL.  There is one space after the P;
+                        <prefix> is prefixed to the file name.  (Don't
+			forget a trailing slash if you give a directory
+                        name-- it's a prefix, not a directory pathname.)
+			Note: you can insert the line and move the existing
+			files.	(Relink libphase and writelib.)
+
+	  unitlod.a	No longer writes debug information to standard
+			output.  Knows about library prefix; see libphase.a
+			above.	(Relink any tools which use unitlod.)
+
+02/23/89  --		Documentation errors: the following errors in
+			front.doc have caused difficulty for users:
+			(1) any reference to predef.aa should read
+			_standrd.aa (2) in regenerating Diana, makeidl
+			must be run before putdn.
+
+03/09/89  expreso.a	Fixed various errors where syntax tree as parsed
+	  instant.a	was not replaced by tree after overload resolution.
+	  nodwalk.a
+	  redsubp.a
+
+04/07/89  --		Note: Evidently Verdix Ada on the Sun reuses an
+			existing file when direct_io.create is called.
+			If there is an existing file $$$.TMP when
+			loadgrmr is called, it will be retained, even
+			if it happens to be large.  Theregfore, $$$.TMP
+			should be deleted before running loadgrmr.
+			(For the distributed Diana, $$$.TMP and hence
+			PARSE.VM has length 25600 bytes.)  Note that
+			a too-large PARSE.VM will not cause any error,
+			except for the extra time to copy it.
+
+07/13/89  pageman_.a	Number of virtual pages has been set to 10000 in
+			the source.  This should handle most anything--
+                        please tell me if it doesn't.  (See entry for
+			01/13/89 above.)  Note that this change requires
+			relinking all executables; otherwise intermediate
+			files will be incompatible between phases.
+
+07/14/89  repnode_.a	This unit contains one function, node_rep, used
+	  repnode.a	to obtain a representation of a node for debugging
+			purposes.  It is identical to the function of the
+			same name in package visutil; the latter, however,
+			requires linking a substantial number of units
+			which are internal to the semantic analyzer.  (Provided
+			for use in programs other than the front end itself.)
+			Usage: NODE_REP(the_node) returns a STRING image of
+			node pointer the_node.
+
+09/23/89  fixwith.a	Builtin operators sometimes appeared to have been
+			defined twice (and so appeared to be ambiguous)
+			for [limited-]private types.
+
+03/08/90  dianama_.a	Changed names of files dianaman_.a, dianatbl_.a,
+	  dianatb_.a	loaddtbl_.a, ltext_io_.a, printnod_.a, termlist_.a,
+	  loaddtb_.a	text2_io_.a, so that names would not be truncated
+	  ltext_i_.a	when transferring copies of the front end on
+	  printno_.a	MS DOS floppy disks.  (No change needed to object
+	  termlis_.a	or exe files.)
+	  text2_i_.a
+
+03/08/90  --		(OBSOLETE -- see 9/30/93)
+                        To contact the author for help: Bill Easton at
+			Peregrine Systems, Inc., PO Box 192, Bluemont, VA
+			22012; Phone (703) 689-1168; E-Mail
+			easton@stars.reston.unisys.com.  (Prior E-Mail
+			address given in front.doc may not work.)
+			Please tell me if you are using it; then I can tell
+			you about updates/fixes/new versions.
+
+03/08/90  diana86_.a	An alternate binding to Diana is provided; it is
+	  put86.a	closer to the binding given in the Diana 83 manual.
+			There is a function and a procedure for each
+			attribute; attributes are not given by an enumeration
+			type.  To use it, with and use diana86 rather than
+			(the three units) diana, dianattr and dianaman.
+			Units using one binding can be combined with units
+			using the other, if desired.  (put86.a takes the
+			place of putdn.a for creating diana86_.a)
+
+03/28/90  --		This prototype has been tested on ACVC1.11 (class A
+			and C).  It fails 33 tests; these will not be fixed
+			unless someone runs into the problems other than with
+			the ACVC, in anticipation of the whole thing being
+			replaced soon.
+
+03/28/90  --		Note: Version as of this date is the first one
+			distributed by the author on PD floppies as
+			well as via the network.
+
+05/07/90  nodwalk.a     The implicit declaration of "/=" was not being
+			constructed correctly for an explicit declaration
+                        of "=".
+
+05/19/90  newsnam.a     The implicit declaration of "/=" was not being
+			constructed correctly in the instantiation of a
+                        package containing an explicit declaration of "=".
+
+06/13/90  redsubp.a	Was crashing on function call whose designator
+			was another function call whose designator was
+                        an attribute, e.g.  INTEGER'IMAGE(12)(2).
+
+06/22/90  stmwalk.a	Incorrect diana tree for entry call where the
+			entry name is a selected for which the as_name
+			should be an indexed (for a member of an array
+			of tasks.)
+
+06/29/90  stmwalk.a	Repair of preceding fix (was not right when
+			prefix of a selected entry name was of access type)
+
+06/29/90  nodwalk.a	Was giving spurious error on use of renamed exception.
+
+07/19/90  unitlod.a	Was sometimes crashing when unit not found.  (Note.
+			not part of the front end.)
+
+07/20/90  expreso.a	Not resolving prefix of selected for some prefixes.
+	  redsubp.a	Not creating normalized param list for function call
+			with all default parameters.
+
+07/31/90  newsnam.a	Incorrect declarative region for entry in task type
+			in package instantiation.  (Symptom was that entry
+			name was not visible by selection.)
+
+08/01/90  expreso.a	Incorrect structure for range constraint in
+			subtype indication.
+
+08/01/90  nodwalk.a	Incorrect construction of constant_id for renamed
+			object which is a constant.
+
+08/07/90  instant.a	Crash when named generic actual where formal is an
+			operator (quoted string).
+
+08/09/90  expreso.a	Problem recognizing ancestor unit as such for
+	  semphase.a	inheriting with clauses in subunits.  Also
+			crashed in some cases when prefix of selected
+			name not visible.
+
+08/29/90  aggreso.a	sm_normalized_comp_s built incorrectly for
+			some array aggregates.	(Sometimes caused
+			writelib to crash because of invalid tree.)
+			Note that sm_normalized_comp_s is not quite
+			correct--values from others clause are not
+			inserted at the correct places.
+
+08/30/90  semphase.a	Failing to clean up ancestor names when subunit
+			not the last unit of compilation.  (Symbols defined
+			in ancestors then looked undefined or multiply-defined)
+
+08/30/90  semphase.a    Removed (incorrect) restriction that 'ADDRESS
+	  fixpre.a	attribute requires predefined SYSTEM to be
+	  _standrd.aa	withed.  (Note.  The same check for address
+	  system.aa	representation spec is now broken.)
+			To implement this change, it is necessary to
+			rebuild the Diana library to reflect changes
+			in _standrd.aa and system.aa.  (A representation
+			of STANDARD.ADDRESS, not visible in Ada code,
+			has been placed in _standrd.aa.)
+
+08/30/99  prettydi.a	Modified to not crash when output from fixpre
+                        is printed.  (Doesn't affect anything else.)
+
+09/07/90  fixwith_.a	Fixed code to set up access to symbols in ancestors
+	  fixwith.a	of subunits.
+	  semphase.a
+
+09/13/90  semphase.a	Fixed code in 9/07 fix; was trying to get sm_first
+			from a task variable_id.
+
+09/21/90  fixwith.a	Use clauses in withed units / ancestors of subunits
+			were being propagated incorrectly.
+
+09/21/90  nodwalk.a	After reporting identifier to be of wrong kind,
+			was using it anyway and sometimes crashing.
+
+09/21/90  requtil_.a	Added pragma ELABORATE(REQGENE) to force
+			elaboration of generic body before instantiations.
+			(This, I hope, fixes problem of elaboration
+			error prior to main program.)
+
+09/22/90  unitlod.a	Add with clause corresponding to pragma ELABORATE.
+			(Not part of front end.)
+
+10/01/90  fixwith.a	Error in 9/21 fix.
+
+08/17/91  nodwalk.a	Was not setting sm_first when renaming a constant obj.
+
+08/17/91  semphase.a	Fixed code in 9/07 fix; was trying to get sm_first
+			from a task variable_id.  (9/13/90 fix to this
+		 	didn't get into 'official' copy, somehow)
+
+09/19/91  attwalk.a	Using lx_symrep instead of lx_srcpos; crashed on
+			selected as prefix of attribute.
+
+10/17/92  printnod.a    Modified to detect if little-endian or big-endian
+                        machine; discarded printnod.vax.  (Note.  It cares
+                        because it looks at the binary pattern of a node
+                        to avoid crashing if it is printing invalid data.)
+                        Note that there is a rep spec of the form
+                        "for X use at Y'address" to force overlay; this
+                        seems to work on Alsys and Verdix, but may
+                        not work on all compilers.
+
+02/03/93  prawalk.a     Was placing def rather than type spec in 
+                        argument of SUPPRESS pragma.
+
+09/30/93  set_dfl_.a    Fixed context clause.  (These are specs for
+          evalnum_.a    library subprograms; explicit spec added to
+                        allow compilation order tools to get right answer.)
+
+09/30/93  gensubs_.a    Increased generic instantiation counter (bug trap)
+                        from 5000 to 25000.
+
+09/30/93  fixwith.a     Defs should be created for decls in private parts of 
+                        packages that are subordinate to a package spec.
+                        This allows things in private parts to be visible
+                        within body of subordinate package.
+
+09/30/93  --		To contact the author for help: Bill Easton at
+			Peregrine Systems, Inc., PO Box 192, Bluemont, VA
+			22012; Phone (703) 689-1168; E-Mail
+			easton@access.digex.net.  (Prior E-Mail
+			addresses given above and in front.doc do not work.)
+			Please tell me if you are using it; then I can tell
+			you about updates/fixes/new versions.
+
+10/02/93  requtil.a     Private types whose full type was derived from
+          expreso.a     a private type were being handled incorrectly.
+                        (Fact that type spec was [l_]private used
+                        in determining if spec was possibly full spec;
+                        now looking at source id related to spec.)
+
+10/02/93  nodwalk.a     Formal parameter names do not hide homographs
+                        in prior formal parameter declarations for
+                        the same subprogram or entry declaration.
+                        (This is an AI change which happened between
+                        ACVC 1.10 and ACVC 1.11.)
+
+10/13/93  20+ files     Fixed remaining problems detected by ACVC 1.11.
+                        These were generally obscure things, such as
+                        'ADDRESS for attribute functions or use of
+                        renamed built-in operator in static expression.
+                        Front now accepts ACVC Class A and Class C tests.
+                        Of course, we have no way to verify that the
+                        resulting Diana is correct, except for spot checks.
+                        There is still no claim that all incorrect programs
+                        are rejected (Class B tests).

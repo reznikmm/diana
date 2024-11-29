@@ -1,0 +1,106 @@
+package LTYPE is
+  type LEXTYPE is
+    ( LT_ERROR
+    , LT_ABORT
+    , LT_ABS
+    , LT_ACCEPT
+    , LT_ACCESS
+    , LT_ALL
+    , LT_AND
+    , LT_ARRAY
+    , LT_AT
+    , LT_BEGIN
+    , LT_BODY
+    , LT_CASE
+    , LT_CONSTANT
+    , LT_DECLARE
+    , LT_DELAY
+    , LT_DELTA
+    , LT_DIGITS
+    , LT_DO
+    , LT_ELSE
+    , LT_ELSIF
+    , LT_END
+    , LT_ENTRY
+    , LT_EXCEPTION
+    , LT_EXIT
+    , LT_FOR
+    , LT_FUNCTION
+    , LT_GENERIC
+    , LT_GOTO
+    , LT_IF
+    , LT_IN
+    , LT_IS
+    , LT_LIMITED
+    , LT_LOOP
+    , LT_MOD
+    , LT_NEW
+    , LT_NOT
+    , LT_NULL
+    , LT_OF
+    , LT_OR
+    , LT_OTHERS
+    , LT_OUT
+    , LT_PACKAGE
+    , LT_PRAGMA
+    , LT_PRIVATE
+    , LT_PROCEDURE
+    , LT_RAISE
+    , LT_RANGE
+    , LT_RECORD
+    , LT_REM
+    , LT_RENAMES
+    , LT_RETURN
+    , LT_REVERSE
+    , LT_SELECT
+    , LT_SEPARATE
+    , LT_SUBTYPE
+    , LT_TASK
+    , LT_TERMINATE
+    , LT_THEN
+    , LT_TYPE
+    , LT_USE
+    , LT_WHEN
+    , LT_WHILE
+    , LT_WITH
+    , LT_XOR
+    , LT_AMPERSAND    -- &
+    , LT_APOSTROPHE   -- '
+    , LT_LEFT_PAREN   -- (
+    , LT_RIGHT_PAREN  -- )
+    , LT_STAR	      -- *
+    , LT_PLUS	      -- +
+    , LT_COMMA	      -- ,
+    , LT_HYPHEN       -- -
+    , LT_PERIOD       -- .
+    , LT_SLASH	      -- /
+    , LT_COLON	      -- :
+    , LT_SEMICOLON    -- ;
+    , LT_LESS_THAN    -- <
+    , LT_EQUAL	      -- =
+    , LT_GREATER_THAN -- >
+    , LT_VERTICAL_BAR -- |
+    , LT_ARROW	      -- =>
+    , LT_DOUBLE_DOT   -- ..
+    , LT_DOUBLE_STAR  -- **
+    , LT_BECOMES      -- :=
+    , LT_NOT_EQUAL    -- /=
+    , LT_GREATER_EQUAL-- >=
+    , LT_LESS_EQUAL   -- <=
+    , LT_LEFT_LABEL   -- <<
+    , LT_RIGHT_LABEL  -- >>
+    , LT_BOX	      -- <>
+    , LT_IDENTIFIER
+    , LT_NUMERIC_LIT
+    , LT_STRING_LIT
+    , LT_CHAR_LIT
+    , LT_END_MARK );
+
+  subtype LT_WITH_SEMANTICS is LEXTYPE range LT_IDENTIFIER .. LT_CHAR_LIT;
+  subtype LT_RESERVED	    is LEXTYPE range LT_ABORT .. LT_XOR;
+  subtype LT_SYMBOL	    is LEXTYPE range LT_AMPERSAND .. LT_BOX;
+  subtype LT_TERMINAL	    is LEXTYPE range LT_ABORT .. LT_BOX;
+
+  function LEX_IMAGE (TY: LEXTYPE) return STRING;
+
+end LTYPE;

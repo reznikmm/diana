@@ -1,0 +1,18 @@
+with USERPK; use USERPK;
+with SETUTIL; use SETUTIL;
+
+package ATTWALK is
+
+    procedure EVAL_ATTRIBUTE 
+		( EXP:		TREE
+		; TYPESET:	out TYPESET_TYPE
+		; IS_SUBTYPE:   out BOOLEAN
+		; is_function:  boolean := false );
+
+    function RESOLVE_ATTRIBUTE ( EXP: TREE ) return TREE;
+
+    function EVAL_ATTRIBUTE_IDENTIFIER(ATTRIBUTE_NODE: TREE) return TREE;
+
+    --procedure WALK_ATTRIBUTE_FUNCTION(EXP: TREE);
+
+end ATTWALK;

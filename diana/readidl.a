@@ -1,0 +1,361 @@
+with TEXT2_IO, USERPK, LALRIDL, DIANAMAN;
+use  TEXT2_IO, USERPK, LALRIDL, DIANAMAN;
+
+procedure READIDL is  -- Reads IDL and puts it in virtual memory
+
+  -- user_root
+  --   xd_grammar:
+  --	 rule_s
+  --	   xd_list:
+  --	   < rule
+  --	       xd_name: name of the node
+  --	       xd_ruleinfo: node number
+  --	       lx-srcpos: ...
+  --	       xd_list:
+  --	       < terminal
+  --		   xd_symrep: name of the attribute
+  --		   xd_ter_nbr: attribute number, negative for list
+  --		   lx-srcpos: ...
+  --		 nonterminal  -- applies to preceding terminal (attribute)
+  --		   xd_symrep: 2-char walk code
+  --		   xd_rule: line of code > >
+
+  INFILE_NAME	   : PNAME;-- name of IDL source file
+  IFILE 	   : FILE_TYPE; -- IDL source file
+  LINE_COUNT	   : NATURAL := 0;
+  SLINE 	   : STRING(1 .. MAX_STRING); -- text of the current line
+  COL		   : NATURAL; -- next column to scan
+  F_COL 	   : NATURAL; -- first column of lexical element
+  LAST		   : NATURAL; -- number of characters in line read
+  TOKEN 	   : PNAME; -- text of token
+  TOKEN_IS_NAME    : BOOLEAN;
+  NODE_COUNT	   : INTEGER := -1;
+  ATTR_COUNT	   : INTEGER := -1;
+  SOURCE_LIST	   : SEQ_TYPE; -- list of source line records
+  SOURCELINE	   : TREE;
+  SOURCEPOS	   : TREE; -- (really a SOURCE_POSITION)
+  DOUBLE_AT_SIGN   : BOOLEAN := FALSE; -- Have we seen double @
+
+  procedure MAIN;
+  procedure PROCESS_IDL;
+  procedure GET_TOKEN;
+
+  procedure MAIN is
+  begin
+
+    -- Get source file name
+
+    --SET(INFILE_NAME, TO => COMMAND_LINE);
+    SET(INFILE_NAME, TO => "LALRIDL.IDL");
+    -- remove leading blanks from file name (Janus requires)
+    declare
+      FCOL: INTEGER;
+      FLAST: INTEGER;
+      FTEXT: STRING(1 .. MAX_STRING);
+    begin
+      FLAST := LENGTH(INFILE_NAME);
+      FTEXT(1 .. FLAST) := TO_STRING(INFILE_NAME);
+      FCOL := 1;
+      for I in 1 .. FLAST
+      loop
+        exit
+          when FTEXT(I) /= ' ';
+        FCOL := FCOL + 1;
+      end loop;
+      SET(INFILE_NAME, TO => FTEXT(FCOL .. FLAST));
+    end;
+    OPEN (IFILE, IN_FILE, TO_STRING(INFILE_NAME));
+    CREATE_DIANA;
+    SOURCE_LIST := MAKE;
+
+    -- Set up and read first token
+    LAST := 0;
+    COL := 1;
+    GET_TOKEN;
+    PROCESS_IDL;
+    LIST(CONST_ROOT,SOURCE_LIST);
+    CLOSE (IFILE);
+    CLOSE_DIANA;
+  end MAIN;
+
+  procedure PROCESS_IDL is
+
+    USER_ROOT	 : TREE;
+    IDL 	 : TREE;
+    NODE	 : TREE;
+    NODE_LIST	 : SEQ_TYPE := MAKE;
+    PRIOR_TOKEN  : PNAME;
+    type ATTR_TYPE IS (NORMAL, SEQ);
+
+    procedure MAKE_NODE (NODE_NAME : PNAME) is
+
+	SYMBOL : TREE := STORESYM (NODE_NAME);
+	SEQ    : SEQ_TYPE := LIST (SYMBOL);
+	DEF    : TREE;
+
+    begin
+	if IS_EMPTY (SEQ)
+	then   -- creates a new node
+	  NODE_COUNT := NODE_COUNT + 1;
+	  NODE := MAKE (DN_RULE); -- Creates and returns a DIANA node
+	  D (XD_NAME, NODE, SYMBOL);
+	  LIST (NODE, MAKE);
+	  DI (XD_RULEINFO, NODE, NODE_COUNT);
+	  D (LX_SRCPOS, NODE, SOURCEPOS);
+          -- inserts new node in the definition list for it's name
+	  LIST (SYMBOL, APPEND (MAKE, NODE));
+	  NODE_LIST := APPEND (NODE_LIST, NODE); --adds to list of nodes
+	else -- thing already defined with its node
+	  DEF := HEAD (SEQ);
+	  if KIND (DEF) = DN_RULE
+	  then
+	    if DEF /= NODE then
+	      NODE := DEF;
+	      ERROR (SOURCEPOS, "Duplicate node - " & NODE_NAME);
+	    end if;
+	  else
+	    ERROR (SOURCEPOS, "Not defined as a node - " & NODE_NAME);
+	  end if;
+	end if;
+    end MAKE_NODE;
+
+    procedure MAKE_ATTR ( ATTR_NAME : PNAME; ATYPE : ATTR_TYPE) is
+
+	SYMBOL	: TREE := STORESYM (ATTR_NAME);
+	SEQ	: SEQ_TYPE := LIST (SYMBOL);
+	ATTR	: TREE;
+	ASEQ	: SEQ_TYPE;
+    begin
+	if IS_EMPTY (SEQ)
+	then
+	  ATTR_COUNT := ATTR_COUNT + 1;
+	  ATTR := MAKE (DN_TERMINAL);
+	  D (XD_SYMREP, ATTR, SYMBOL);
+	  case ATYPE is
+	    when NORMAL =>
+	      DI (XD_TER_NBR, ATTR, ATTR_COUNT);
+	    when others =>  -- i.e., SEQ
+	      DI (XD_TER_NBR, ATTR, - ATTR_COUNT);
+	  end case;
+	  D (LX_SRCPOS, ATTR, SOURCEPOS);
+	  LIST (SYMBOL, APPEND (MAKE, ATTR));
+	else
+	  ATTR := HEAD (SEQ);
+	end if;
+	if KIND (ATTR) /= DN_TERMINAL
+	then
+	  ERROR (SOURCEPOS, "Not defined as an Attribute -" & ATTR_NAME);
+	else -- Check SEQ
+	  case ATYPE is
+	    when NORMAL =>
+	      if DI (XD_TER_NBR, ATTR) < 0
+	      then
+		ERROR (SOURCEPOS, "ATTR is SEQ" & ATTR_NAME);
+	      end if;
+	    when others =>  -- SEQ
+	      if DI (XD_TER_NBR, ATTR) >= 0
+	      then
+		ERROR (SOURCEPOS, "ATTR is not SEQ & ATTR_NAME");
+	      end if;
+	  end case;
+	  ASEQ := LIST (NODE);
+	  LIST (NODE, APPEND (ASEQ, ATTR));
+	end if;
+    end MAKE_ATTR;
+
+    procedure COPY_CODE is
+	ASEQ	: SEQ_TYPE;
+	NTER	: TREE := MAKE(DN_NONTERMINAL);
+	WALK	: STRING(1 .. 2);
+	CODE	: STRING(1 .. MAX_STRING);
+	OUT_COL : INTEGER := 0;
+    begin
+	CODE := (others => ' ');
+
+	ASEQ := LIST (NODE);
+	LIST (NODE, APPEND (ASEQ, NTER));
+        if COL + 3 > LAST or else SLINE(COL + 2) /= ']'
+        or else (SLINE(COL+3) /= ' ' and SLINE(COL+3) /= ASCII.HT) then
+	  ERROR(SOURCEPOS, "Bad code line");
+	else
+
+	  WALK(1) := SLINE(COL);
+	  WALK(2) := SLINE(COL+1);
+          COL := COL + 3; -- first ch after ']'
+	  if SLINE(COL) = ASCII.HT then
+	    OUT_COL := ( 8 - ( COL mod 8 ) ) - 1;
+	  end if;
+	  COL := COL + 1;
+	  while COL <= LAST loop
+	    if SLINE(COL) /= ASCII.HT then
+	      OUT_COL := OUT_COL + 1;
+	      CODE(OUT_COL) := SLINE(COL);
+	    else
+	      OUT_COL := OUT_COL + ( 8 - (COL mod 8) );
+	    end if;
+	    COL := COL + 1;
+	  end loop;
+	  if OUT_COL = 0 then
+	    OUT_COL := 1;
+	  end if;
+	  D(XD_SYMREP, NTER, STORESYM(WALK));
+	  D(XD_RULE, NTER, STORETEXT(CODE(1 .. OUT_COL)));
+	end if;
+    end COPY_CODE;
+
+  begin 		       -- PROCESS_IDL
+    while not IS_EQUAL(TOKEN, "End")
+    loop
+      if TOKEN_IS_NAME
+      then
+	SET(PRIOR_TOKEN, TO => TOKEN);
+      elsif IS_EQUAL(TOKEN, "=>")
+	 then -- Prior token is node name
+	   MAKE_NODE (PRIOR_TOKEN); -- Node is result
+      elsif IS_EQUAL(TOKEN, ":")
+	 then
+	   GET_TOKEN;
+	   if IS_EQUAL(TOKEN, "Seq")
+	   then
+	     MAKE_ATTR (PRIOR_TOKEN, SEQ);
+	   -- Suppress lx_comments attributes
+	   elsif not IS_EQUAL(PRIOR_TOKEN, "lx_comments") then
+	     MAKE_ATTR (PRIOR_TOKEN, NORMAL);
+	   end if;
+      elsif IS_EQUAL(TOKEN, "[") then
+	 COPY_CODE;
+      end if;
+      GET_TOKEN;
+    end loop;
+
+    -- Save IDL in user root
+    IDL := MAKE(DN_RULE_S);
+    LIST(IDL, NODE_LIST);
+    USER_ROOT := MAKE(DN_USER_ROOT);
+    D(XD_SOURCENAME, USER_ROOT, STORETEXT(INFILE_NAME));
+    D(XD_GRAMMAR, USER_ROOT, IDL);
+    D(XD_USER_ROOT, CONST_ROOT, USER_ROOT);
+  end PROCESS_IDL;
+
+  procedure GET_TOKEN is
+    use ASCII;
+    TOKEN_LENGTH:  NATURAL;
+    TOKEN_TEXT: STRING(1 .. MAX_STRING);
+  begin
+    -- skip leading blanks and comment
+    while COL <= LAST
+          and then (SLINE(COL) = ' '
+	  or else SLINE(COL) = HT)
+    loop
+      COL := COL + 1;
+    end loop;
+    if COL < LAST
+       and then SLINE(COL) = '-'
+       and then SLINE(COL+1) = '-'
+    then
+      COL := LAST + 1;
+    end if;
+    if COL > LAST
+    then  -- read new non-empty line
+      loop  -- Read a line
+	LINE_COUNT := LINE_COUNT + 1;
+	if END_OF_LINE(IFILE)
+        then  -- Don't read zero-length line (Janus bug)
+	  SKIP_LINE(IFILE);
+	  LAST := 0;
+	else
+	  SLINE(1 .. 2) := "??";  -- force not to be @
+	  GET_LINE(IFILE,SLINE,LAST);
+	  COL := 1;
+          if SLINE(1) = '@' and SLINE(2) = '@'
+	  then	-- Process only those lines beginning with @@ from now on
+	    DOUBLE_AT_SIGN := TRUE;
+            COL := 3;
+	  elsif DOUBLE_AT_SIGN
+	     then -- Ignor this line
+	       COL := LAST + 1;
+	  end if;
+	end if;
+	-- PUT("----");PUT_LINE(SLINE(1 .. LAST));
+	-- skip leading blanks
+	while COL <= LAST
+              and then (SLINE(COL) = ' '
+	      or else SLINE(COL) = HT)
+	loop
+	  COL := COL + 1;
+	end loop;
+
+	if COL <= LAST
+	then
+          if SLINE(COL) = '-'
+	     and then COL < LAST
+             and then SLINE(COL+1) = '-'
+          then  -- It's a comment, ignore this line
+	    COL := LAST+1;
+	  else	-- Non-blank line found
+	    SOURCELINE := MAKE(DN_SOURCELINE);
+	    DI(XD_NUMBER, SOURCELINE, LINE_COUNT);
+	    LIST(SOURCELINE, MAKE);
+	    SOURCE_LIST := APPEND(SOURCE_LIST, SOURCELINE);
+	    -- Go on to collect token
+	    exit;
+	  end if;
+	end if;
+      end loop;
+    end if;
+    TOKEN_LENGTH := 0;
+    F_COL := COL;
+    TOKEN_LENGTH := TOKEN_LENGTH + 1;
+    TOKEN_TEXT(TOKEN_LENGTH) := SLINE(COL);
+    TOKEN_IS_NAME := FALSE;
+    case SLINE(COL) is
+      when 'A'..'Z' | 'a'..'z' => -- This token is a name
+	TOKEN_IS_NAME := TRUE;
+	COL := COL +1;
+	while COL <= LAST
+              and then ( SLINE(COL) in 'A'..'Z'
+              or else    SLINE(COL) in 'a'..'z'
+              or else SLINE (COL) = '_'
+              or else SLINE (COL) in '0'..'9' )
+	loop
+	  TOKEN_LENGTH := TOKEN_LENGTH + 1;
+	  TOKEN_TEXT (TOKEN_LENGTH) := SLINE (COL);
+	  COL := COL + 1;
+	end loop;
+      when ':' =>    -- Token may be ::=
+	if COL + 2 <= LAST
+           and then SLINE (COL + 1) = ':'
+           and then SLINE (COL + 2) = '='
+	then
+	  TOKEN_LENGTH := 3;
+	  TOKEN_TEXT (2) := SLINE (COL + 1);
+	  TOKEN_TEXT (3) := SLINE (COL + 2);
+	  COL := COL + 3;
+	else
+	  COL := COL + 1;
+	end if;
+      when '=' =>    -- Token may be =>
+	if COL + 1 <= LAST
+           and then SLINE (COL + 1) = '>'
+	then
+	  TOKEN_LENGTH := 2;
+	  TOKEN_TEXT (2) := SLINE (COL + 1);
+	  COL := COL + 2;
+	else
+	  COL := COL + 1;
+	end if;
+      when '|' | ';' | ',' =>
+	COL := COL + 1;
+      when others =>
+	COL := COL + 1;
+    end case;
+    SET(TOKEN, TO => TOKEN_TEXT(1 .. TOKEN_LENGTH));
+    SOURCEPOS := MAKE_SOURCE_POSITION(SOURCELINE,F_COL);
+    --PUT ("TOKEN is "); PUT_LINE (TOKEN);
+
+  end GET_TOKEN;
+
+begin
+  PUT_LINE("Begin READIDL");
+  MAIN;
+end READIDL;

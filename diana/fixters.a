@@ -1,0 +1,204 @@
+with TEXT2_IO, USERPK, LALRIDL, DIANAMAN;
+use  TEXT2_IO, USERPK, LALRIDL, DIANAMAN;
+with TEXT_IO;
+
+procedure FIXTERS is
+  INFILE:	TEXT_IO.FILE_TYPE;
+  BUFFER:       STRING(1..127);
+  LAST:	        NATURAL;
+
+  procedure PROCESS_DIANA_LINE;
+
+  procedure MAIN is
+  begin -- MAIN
+    OPEN_DIANA;
+    TEXT_IO.OPEN(INFILE, IN_FILE, "diana.idl");
+    loop
+      GET_LINE(INFILE, BUFFER, LAST);
+      if LAST < 2 then
+	PUT_LINE(BUFFER(1..LAST));
+      elsif BUFFER(1..2) = "++" then
+	null;
+      elsif BUFFER(1..2) /= "@@" then
+	PUT_LINE(BUFFER(1..LAST));
+      else
+        PROCESS_DIANA_LINE;
+      end if;
+    end loop;
+  exception -- MAIN
+    when END_ERROR =>
+      TEXT_IO.CLOSE(INFILE);
+  end MAIN;
+    
+  procedure PROCESS_DIANA_LINE is
+    TOKEN: STRING(1..127);
+    TOKEN_LAST: NATURAL range 0..127;
+    COL: NATURAL range 1..127 := 3; -- start after the "@@"
+    NODE_SYM: TREE := CONST_VOID;
+    PREFIX : STRING(1..3) := "@@@";
+    IS_FIRST_LINE: BOOLEAN;
+
+    procedure GET_TOKEN is
+    begin
+      TOKEN(1) := '?';
+      TOKEN_LAST := 0;
+      while COL <= LAST
+      and then (BUFFER(COL) = ' ' or else BUFFER(COL) = ASCII.HT) loop
+	COL := COL + 1;
+      end loop;
+      if COL > LAST then
+        return;
+      end if;
+      case BUFFER(COL) is
+      when 'A'..'Z' | 'a'..'z' =>
+        while COL <= LAST 
+	and then (BUFFER(COL) in 'A'..'Z'
+	          or else BUFFER(COL) in 'a'..'z'
+	          or else BUFFER(COL) = '_')
+	loop
+	  TOKEN_LAST := TOKEN_LAST + 1;
+          TOKEN(TOKEN_LAST) := BUFFER(COL);
+          COL := COL + 1;
+	end loop;
+      when '-' =>
+	if COL = LAST	
+	or BUFFER(COL + 1) /= '-' then
+	  TOKEN_LAST := 1;
+	  TOKEN(1) := BUFFER(COL);
+	  COL := COL + 1;
+	else
+	  COL := LAST + 1;
+	end if;
+      when '=' =>
+	if COL = LAST
+	or else BUFFER(COL + 1) /= '>' then
+	  TOKEN_LAST := 1;
+	  TOKEN(1) := BUFFER(COL);
+	  COL := COL + 1;	
+	else
+	  COL := COL + 2;
+	  TOKEN_LAST := 2;
+	  TOKEN(1..2) := "=>";
+	end if;
+      when others =>
+	TOKEN_LAST := 1;
+	TOKEN(1) := BUFFER(COL);
+	COL := COL + 1;
+      end case;
+    end GET_TOKEN;
+
+    procedure SKIP_TO_SEMICOLON is
+    begin
+      loop
+	PUT_LINE(BUFFER(1..LAST));
+	loop
+	  if TOKEN(1..TOKEN_LAST) = ";" then
+	    return;
+	  end if;
+	  exit
+	    when COL > LAST;
+	  GET_TOKEN;
+	end loop;
+	GET_LINE(INFILE, BUFFER, LAST);
+	COL := 3;
+	GET_TOKEN;
+      end loop;
+    end SKIP_TO_SEMICOLON;
+
+    procedure PUT_CLASS_TERS(CLASS: TREE; PFX: STRING) is
+      TER_LIST: SEQ_TYPE;
+      TER: TREE;
+      TER_NAME: PNAME;
+      TER_PFX: STRING(1..3) := "@@@";
+    begin
+      if CLASS = CONST_VOID then
+        return;
+      end if;
+
+      PUT_CLASS_TERS(D(XD_IS_NULLABLE, CLASS), PFX);
+      TER_LIST := LIST(CLASS);
+      while not IS_EMPTY(TER_LIST) loop
+   	POP(TER_LIST, TER);
+        if KIND(TER) = DN_TERMINAL then
+	  SET(TER_NAME, TO => PRINTNAME(D(XD_SYMREP,TER)));
+	  if LENGTH(TER_NAME) >= 3 then
+	    TER_PFX := TO_STRING(TER_NAME)(1..3);
+	  end if;
+          if (TER_PFX) = PFX
+          or else (PFX = "   " 
+	           and then TER_PFX /= "as_"     
+	           and then TER_PFX /= "lx_"     
+	           and then TER_PFX /= "sm_")
+	  then
+	    if IS_FIRST_LINE then
+	      IS_FIRST_LINE := FALSE;
+	      PUT("++  ");
+	      PUT(PRINTNAME(NODE_SYM));
+	      PUT(" =>");
+	      PUT(STRING'(PRINTNAME(NODE_SYM)'LENGTH .. 20 => ' '));
+	    else
+	      PUT("++" & ASCII.HT & ASCII.HT & ASCII.HT & "    ");
+	    end if;
+	    PUT(TER_NAME);
+	    PUT(" -- ");
+	    PUT_LINE(PRINTNAME(D(XD_NAME,CLASS)));
+	  end if;
+	end if;
+      end loop;
+    end PUT_CLASS_TERS;
+
+    procedure PUT_PARENT_TERS(SYM: TREE; PFX: STRING) is
+      DEFLIST: SEQ_TYPE := LIST(SYM);
+      NODE, CLASS: TREE;
+    begin
+      if IS_EMPTY(DEFLIST) then
+	return;
+      end if;
+
+      NODE := HEAD(DEFLIST);
+      if KIND(NODE) /= DN_RULE then
+	return;
+      end if;
+      IS_FIRST_LINE := TRUE;
+      CLASS := D(XD_IS_NULLABLE, NODE);
+      PUT_CLASS_TERS(CLASS, PFX);
+    end;
+
+  begin -- PROCESS_DIANA_LINE
+    GET_TOKEN;
+    if TOKEN(1) in 'a' .. 'z' then
+      NODE_SYM := STORESYM(TOKEN(1..TOKEN_LAST));
+      GET_TOKEN;
+      if TOKEN(1..TOKEN_LAST) = "=>" then
+	GET_TOKEN;
+      else
+  	NODE_SYM := CONST_VOID;
+      end if;
+    end if;
+    if NODE_SYM = CONST_VOID then		
+      PUT_LINE(BUFFER(1..LAST));
+      return;
+    end if;
+
+    if TOKEN_LAST >= 3 then
+      PREFIX := TOKEN(1..3);
+    end if;
+    if PREFIX = "as_" then
+      PUT_PARENT_TERS(NODE_SYM, "as_");
+      SKIP_TO_SEMICOLON;
+      PUT_PARENT_TERS(NODE_SYM, "lx_");
+      PUT_PARENT_TERS(NODE_SYM, "sm_");
+      PUT_PARENT_TERS(NODE_SYM, "   ");
+    else
+      PUT_PARENT_TERS(NODE_SYM, "as_");
+      PUT_PARENT_TERS(NODE_SYM, "lx_");
+      PUT_PARENT_TERS(NODE_SYM, "sm_");
+      PUT_PARENT_TERS(NODE_SYM, "   ");
+      SKIP_TO_SEMICOLON;
+    end if;
+    LIST(NODE_SYM, MAKE); -- no more for this node
+  end PROCESS_DIANA_LINE;
+
+begin
+  MAIN;
+end FIXTERS;
