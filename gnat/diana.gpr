@@ -2,7 +2,7 @@
 --
 --  SPDX-License-Identifier: Unlicense
 
-with "diana_config.gpr";
+with "../config/diana_config.gpr";
 project Diana is
 
    for Library_Name use "diana";

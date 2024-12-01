@@ -15,14 +15,10 @@ jobs:
     - name: Build diana
       run: alr build
     - name: Build phases
-      run: |
-        for J in phases/* ; do
-          alr -C $J build
-        done
+      run: alr -C frontend build
     - name: Build RTL
       run: |
-        mkdir exe
-        cp -v phases/*/bin/* exe/
+        ln -s -v bin exe
         cp -v share/diana/data/{PARSE,DIANA}.TBL .
         cp -v share/diana/data/ADA__LIB.CTL .
         mkdir ADA__LIB
